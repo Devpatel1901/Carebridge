@@ -1,0 +1,132 @@
+version: "3.9"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: redis-cli ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db_agent:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.db_agent.main:app
+        SERVICE_PORT: "8003"
+    ports:
+      - "8003:8003"
+    env_file:
+      - ../.env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: sqlite+aiosqlite:///./data/carebridge.db
+    volumes:
+      - sqlite_data:/app/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  brain_agent:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.brain_agent.main:app
+        SERVICE_PORT: "8001"
+    ports:
+      - "8001:8001"
+    env_file:
+      - ../.env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      DB_AGENT_URL: http://db_agent:8003
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db_agent:
+        condition: service_started
+
+  communication_agent:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.communication_agent.main:app
+        SERVICE_PORT: "8002"
+    ports:
+      - "8002:8002"
+    env_file:
+      - ../.env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      DB_AGENT_URL: http://db_agent:8003
+      BRAIN_AGENT_URL: http://brain_agent:8001
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      brain_agent:
+        condition: service_started
+      db_agent:
+        condition: service_started
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.scheduler.main:app
+        SERVICE_PORT: "8004"
+    ports:
+      - "8004:8004"
+    env_file:
+      - ../.env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      COMM_AGENT_URL: http://communication_agent:8002
+      DB_AGENT_URL: http://db_agent:8003
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      communication_agent:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ../frontend/nextjs-dashboard
+      dockerfile: ../../infra/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_DB_AGENT_URL: http://localhost:8003
+      NEXT_PUBLIC_BRAIN_AGENT_URL: http://localhost:8001
+      NEXT_PUBLIC_SCHEDULER_URL: http://localhost:8004
+
+volumes:
+  sqlite_data:
