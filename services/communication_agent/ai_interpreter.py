@@ -12,6 +12,11 @@ from shared.logging import get_logger
 
 logger = get_logger("ai_interpreter")
 
+# Twilio waits ~15s for voice webhooks; LLM + Redis + TwiML must stay under that.
+# HTTP client timeout is slightly lower than asyncio.wait_for so the SDK fails first.
+LLM_TIMEOUT_SEC = 11.0
+ANTHROPIC_HTTP_TIMEOUT_SEC = 10.0
+
 
 class InterpretedResponse(BaseModel):
     raw_speech: str
@@ -73,7 +78,8 @@ def _llm_interpret(
         model="claude-sonnet-4-20250514",
         api_key=settings.anthropic_api_key,
         temperature=0,
-        max_tokens=512,
+        max_tokens=384,
+        default_request_timeout=ANTHROPIC_HTTP_TIMEOUT_SEC,
     )
 
     user_prompt = (
@@ -122,12 +128,15 @@ async def interpret_speech_response(
         )
 
     try:
-        result = await asyncio.to_thread(
-            _llm_interpret,
-            question_text,
-            question_type,
-            speech_result,
-            diagnosis,
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                _llm_interpret,
+                question_text,
+                question_type,
+                speech_result,
+                diagnosis,
+            ),
+            timeout=LLM_TIMEOUT_SEC,
         )
         logger.info(
             "interpret_speech_response.done",
@@ -136,6 +145,19 @@ async def interpret_speech_response(
             needs_clarification=result.needs_clarification,
         )
         return result
+    except asyncio.TimeoutError:
+        logger.warning(
+            "interpret_speech_response.timeout",
+            timeout_sec=LLM_TIMEOUT_SEC,
+        )
+        return InterpretedResponse(
+            raw_speech=speech_result,
+            interpreted_answer=speech_result,
+            normalized=speech_result,
+            clinical_flags=[],
+            needs_clarification=False,
+            clarification_question=None,
+        )
     except Exception:
         logger.exception("interpret_speech_response.error")
         return InterpretedResponse(

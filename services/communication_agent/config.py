@@ -9,14 +9,11 @@ SERVICE_PORT = 8002
 class CommAgentSettings:
     """Convenience accessor for communication-agent specific settings."""
 
-    def __init__(self) -> None:
-        self._settings: Settings | None = None
-
     @property
     def settings(self) -> Settings:
-        if self._settings is None:
-            self._settings = get_settings()
-        return self._settings
+        # Reload from the environment each time so .env / TWILIO_WEBHOOK_BASE_URL changes
+        # apply without restarting the process (important when ngrok assigns a new URL).
+        return get_settings()
 
     @property
     def twilio_account_sid(self) -> str:

@@ -119,7 +119,7 @@ async def list_jobs() -> list[dict[str, Any]]:
 
 
 @app.post("/trigger/{patient_id}")
-async def manual_trigger(patient_id: str) -> dict[str, str]:
+async def manual_trigger(patient_id: str) -> dict[str, Any]:
     settings = scheduler_settings.settings
     # Cancel any pending auto-scheduled jobs for this patient so it doesn't double-fire
     for job in ap_scheduler.get_jobs():
@@ -127,12 +127,16 @@ async def manual_trigger(patient_id: str) -> dict[str, str]:
             ap_scheduler.remove_job(job.id)
             logger.info("cancelled_pending_job", job_id=job.id, patient_id=patient_id)
     try:
-        await trigger_followup(patient_id, settings)
+        call_result = await trigger_followup(patient_id, settings)
     except Exception as exc:
         logger.exception("manual_trigger_failed", patient_id=patient_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return {"status": "triggered", "patient_id": patient_id}
+    return {
+        "status": "triggered",
+        "patient_id": patient_id,
+        "call": call_result,
+    }
 
 
 @app.get("/health")
