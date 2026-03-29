@@ -311,7 +311,9 @@ async def get_available_slots(
     """Return the next N available doctor slots filtered by urgency window and optionally doctor."""
     from datetime import timedelta
     now = _now()
-    windows = {"high": timedelta(hours=48), "medium": timedelta(days=7), "low": timedelta(days=14)}
+    # Medium must exceed 7 days: seeded slots start the *next* Monday; early Monday UTC can
+    # place the first slot just past a naive 7-day cutoff (next Mon 9am vs Mon+7d 8am).
+    windows = {"high": timedelta(hours=48), "medium": timedelta(days=10), "low": timedelta(days=14)}
     cutoff = now + windows.get(urgency, timedelta(days=7))
 
     conditions = [

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from shared.cache import cache
 from shared.db.engine import create_all_tables, get_db, init_db
 from services.db_agent.seed_demo import seed_demo_patients_if_empty
+from services.db_agent.seed_doctor_slots import ensure_doctor_schedule_slots_if_needed
 from shared.events.bus import event_bus
 from shared.events.contracts import AppointmentConfirmed, JobType, ScheduleEvent
 from shared.logging import CorrelationIdMiddleware, get_logger, setup_logging
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await create_all_tables()
     await seed_demo_patients_if_empty()
+    await ensure_doctor_schedule_slots_if_needed()
 
     await event_bus.subscribe(
         "patient_state_upsert",
