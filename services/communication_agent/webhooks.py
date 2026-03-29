@@ -369,7 +369,10 @@ async def voice_gather_webhook(request: Request) -> Response:
 
         # Inline appointment booking — intercept after the consent question is answered
         if current_q.get("id") == "q_appt_consent":
-            consent_given = _inline_parse_consent(interpreted.interpreted_answer)
+            consent_given = _inline_parse_consent(
+                interpreted.interpreted_answer,
+                interpreted.normalized,
+            )
             logger.info(
                 "voice_gather.consent_check",
                 patient_id=session.get("patient_id"),
@@ -491,13 +494,20 @@ async def voice_complete_webhook(request: Request) -> Response:
         return _twiml(vr)
 
 
-def _inline_parse_consent(answer: str) -> bool:
+def _inline_parse_consent(answer: str, normalized: str = "") -> bool:
     """Return True if the patient's spoken consent answer is affirmative.
 
-    Handles raw speech ("yes", "yeah") and the normalized paraphrase the
-    AI interpreter produces ("Patient clearly requests to schedule...").
-    Negative patterns are checked first so an explicit decline always wins.
+    Checks `normalized` ("yes"/"no") first — the most reliable signal — then
+    falls back to token matching on the AI's interpreted_answer text.
+    Negative patterns are checked before affirmatives so an explicit decline always wins.
     """
+    # normalized == "yes" / "no" is the cleanest signal from the interpreter
+    norm = (normalized or "").lower().strip()
+    if norm == "no":
+        return False
+    if norm == "yes":
+        return True
+
     if not answer:
         return False
     text = answer.lower().strip()
@@ -518,12 +528,18 @@ def _inline_parse_consent(answer: str) -> bool:
     if any(token in text for token in raw_affirmatives):
         return True
 
+    # Broad paraphrase tokens — covers the many ways Claude summarises consent
     paraphrase_affirmatives = (
         "requests to schedule", "wants to schedule", "would like to schedule",
         "clearly requests", "requests an appointment", "wants an appointment",
         "would like an appointment", "asking to schedule", "expressed desire",
         "wishes to schedule", "has requested", "indicated they want",
         "patient requests", "patient wants",
+        # Claude variants observed in production
+        "consents to", "agrees to", "accepted", "confirmed appointment",
+        "would like to book", "wants to book", "like to schedule",
+        "has consented", "given consent", "expresses desire",
+        "willing to", "open to scheduling",
     )
     return any(token in text for token in paraphrase_affirmatives)
 
@@ -757,15 +773,24 @@ def _appt_session_key(params: Any) -> str | None:
 
 
 def _format_slot_for_speech(slot: dict[str, Any], index: int) -> str:
-    """Convert ISO slot_start to a human-friendly spoken string."""
-    from datetime import datetime
+    """Convert ISO slot_start to a human-friendly spoken string (Eastern, Windows-safe)."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
     try:
         dt = datetime.fromisoformat(slot["slot_start"])
-        day = dt.strftime("%A, %B %-d")
-        time = dt.strftime("%-I:%M %p")
-        return f"Option {index + 1}: {day} at {time} with {slot['doctor_name']}."
+        # SQLite returns naive datetimes that represent UTC. Attach tzinfo before converting
+        # so Python doesn't assume system local time.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+        # %-d / %-I are Linux-only; use lstrip("0") for cross-platform zero-stripping
+        day_str = dt_et.strftime("%A, %B %d").replace(" 0", " ")
+        hour = dt_et.strftime("%I").lstrip("0") or "12"
+        minute_part = f":{dt_et.strftime('%M')}" if dt_et.minute else ""
+        ampm = dt_et.strftime("%p")
+        return f"Option {index + 1}: {day_str} at {hour}{minute_part} {ampm} Eastern with {slot['doctor_name']}."
     except Exception:
-        return f"Option {index + 1}: {slot['slot_start']} with {slot['doctor_name']}."
+        return f"Option {index + 1}: with {slot['doctor_name']}."
 
 
 async def appointment_voice_start_webhook(request: Request) -> Response:
@@ -890,12 +915,20 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
 
             if confirm_resp.status_code == 200:
                 confirmed = confirm_resp.json()
-                from datetime import datetime
+                from datetime import datetime, timezone
+                from zoneinfo import ZoneInfo
                 try:
                     dt = datetime.fromisoformat(confirmed["scheduled_at"])
-                    spoken_time = dt.strftime("%A, %B %-d at %-I:%M %p")
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    dt_et = dt.astimezone(ZoneInfo("America/New_York"))
+                    day_str = dt_et.strftime("%A, %B %d").replace(" 0", " ")
+                    hour = dt_et.strftime("%I").lstrip("0") or "12"
+                    minute_part = f":{dt_et.strftime('%M')}" if dt_et.minute else ""
+                    ampm = dt_et.strftime("%p")
+                    spoken_time = f"{day_str} at {hour}{minute_part} {ampm} Eastern"
                 except Exception:
-                    spoken_time = confirmed["scheduled_at"]
+                    spoken_time = confirmed.get("scheduled_at", "the scheduled time")
                 doctor = confirmed.get("doctor_name", chosen_slot["doctor_name"])
                 vr.say(
                     f"Perfect. Your appointment has been confirmed for {spoken_time} with {doctor}. "

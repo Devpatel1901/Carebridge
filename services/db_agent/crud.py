@@ -23,6 +23,7 @@ from shared.db.models import (
     Questionnaire,
 )
 from shared.logging import get_logger
+from shared.questionnaire_defaults import ensure_appointment_consent_question
 
 logger = get_logger("db_agent.crud")
 
@@ -610,6 +611,25 @@ async def get_patient_detail(
         else None
     )
 
+    questionnaire_out: dict[str, Any] | None = None
+    if latest_q:
+        qs, consent_injected = ensure_appointment_consent_question(
+            json.loads(latest_q.questions_json)
+        )
+        if consent_injected:
+            logger.info(
+                "questionnaire.appt_consent_injected",
+                patient_id=patient.id,
+                questionnaire_id=latest_q.id,
+                source="patient_detail",
+            )
+        questionnaire_out = {
+            "id": latest_q.id,
+            "questions": qs,
+            "diagnosis_context": latest_q.diagnosis_context,
+            "generated_at": latest_q.generated_at,
+        }
+
     return {
         "id": patient.id,
         "name": patient.name,
@@ -642,16 +662,7 @@ async def get_patient_detail(
             }
             for m in patient.medications
         ],
-        "questionnaire": (
-            {
-                "id": latest_q.id,
-                "questions": json.loads(latest_q.questions_json),
-                "diagnosis_context": latest_q.diagnosis_context,
-                "generated_at": latest_q.generated_at,
-            }
-            if latest_q
-            else None
-        ),
+        "questionnaire": questionnaire_out,
         "interactions": [
             {
                 "id": i.id,
@@ -875,11 +886,21 @@ async def get_patient_questionnaire(
     q = result.scalar_one_or_none()
     if q is None:
         return None
+    qs, consent_injected = ensure_appointment_consent_question(
+        json.loads(q.questions_json)
+    )
+    if consent_injected:
+        logger.info(
+            "questionnaire.appt_consent_injected",
+            patient_id=q.patient_id,
+            questionnaire_id=q.id,
+            source="get_patient_questionnaire",
+        )
     return {
         "id": q.id,
         "questionnaire_id": q.id,
         "patient_id": q.patient_id,
-        "questions": json.loads(q.questions_json),
+        "questions": qs,
         "diagnosis_context": q.diagnosis_context,
         "generated_at": q.generated_at,
     }

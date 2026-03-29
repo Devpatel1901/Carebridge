@@ -16,6 +16,7 @@ from shared.events.contracts import (
 )
 from shared.config import get_settings
 from shared.logging import get_logger
+from shared.questionnaire_defaults import APPOINTMENT_CONSENT_QUESTION
 from services.brain_agent.llm import get_llm
 
 logger = get_logger("brain_agent.nodes")
@@ -279,15 +280,7 @@ def questionnaire_generation_node(state: BrainState) -> dict[str, Any]:
         ]
 
     # Always append the fixed appointment consent question as the last question
-    questions.append({
-        "id": "q_appt_consent",
-        "text": (
-            "Based on how you're feeling, would you like to schedule an "
-            "in-person appointment with your doctor?"
-        ),
-        "question_type": "appointment_consent",
-        "relevance": "Patient consent for appointment scheduling",
-    })
+    questions.append({**APPOINTMENT_CONSENT_QUESTION})
 
     return {"generated_questions": questions}
 

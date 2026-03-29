@@ -13,19 +13,15 @@ type Props = {
   onScheduled: () => Promise<void>;
 };
 
-const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, "0"));
-
-function snapMinuteToStep(mm: string): string {
-  const n = parseInt(mm, 10);
-  if (Number.isNaN(n)) return "00";
-  const s = Math.min(55, Math.round(n / 5) * 5);
-  return String(s).padStart(2, "0");
-}
+const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
 
 function from24Hour(time24: string): { h12: number; m: string; ap: "AM" | "PM" } {
   const [H, rawM] = time24.split(":");
   const Hn = parseInt(H ?? "0", 10);
-  const M = snapMinuteToStep(rawM ?? "00");
+  let Mn = parseInt(rawM ?? "0", 10);
+  if (Number.isNaN(Mn)) Mn = 0;
+  Mn = Math.max(0, Math.min(59, Mn));
+  const M = String(Mn).padStart(2, "0");
   const ap: "AM" | "PM" = Hn >= 12 ? "PM" : "AM";
   let h12 = Hn % 12;
   if (h12 === 0) h12 = 12;

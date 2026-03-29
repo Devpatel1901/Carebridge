@@ -97,7 +97,7 @@ export function AppointmentsSidebar() {
   const apptByDate = useMemo(() => {
     const map: Record<string, AppointmentItem[]> = {};
     for (const appt of appointments) {
-      const key = isoToDateKey(appt.scheduled_at);
+      const key = apiInstantToEasternDateKey(appt.scheduled_at);
       if (!key) continue;
       if (!map[key]) map[key] = [];
       map[key].push(appt);
