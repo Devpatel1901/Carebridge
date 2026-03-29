@@ -30,6 +30,37 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _age_from_dob(dob: str | None) -> int | None:
+    """Compute age from ISO date string (YYYY-MM-DD)."""
+    if not dob or len(dob) < 10:
+        return None
+    try:
+        from datetime import date
+
+        born = date.fromisoformat(dob[:10])
+        today = date.today()
+        age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        return max(0, age)
+    except ValueError:
+        return None
+
+
+def _ward_from_appointments(appointments: list[Any]) -> str:
+    """Prefer latest appointment with non-empty notes (seed stores ward/bed in notes)."""
+    if not appointments:
+        return "—"
+    sorted_ap = sorted(
+        appointments,
+        key=lambda a: a.created_at or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    for a in sorted_ap:
+        notes = getattr(a, "notes", None)
+        if notes and str(notes).strip():
+            return str(notes).strip()
+    return "—"
+
+
 def _id() -> str:
     return str(uuid.uuid4())
 
@@ -319,21 +350,38 @@ async def store_event(
 # ---------------------------------------------------------------------------
 
 async def get_all_patients(session: AsyncSession) -> list[dict[str, Any]]:
+    """List patients with dashboard fields: reason (latest diagnosis), ward (appointment notes), age."""
     result = await session.execute(
-        select(Patient).order_by(Patient.created_at.desc())
+        select(Patient)
+        .options(
+            selectinload(Patient.discharge_summaries),
+            selectinload(Patient.appointments),
+        )
+        .order_by(Patient.created_at.desc())
     )
     patients = result.scalars().all()
-    return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "phone": p.phone,
-            "status": p.status,
-            "risk_level": p.risk_level,
-            "created_at": p.created_at,
-        }
-        for p in patients
-    ]
+    rows: list[dict[str, Any]] = []
+    for p in patients:
+        latest_ds = None
+        if p.discharge_summaries:
+            latest_ds = max(p.discharge_summaries, key=lambda d: d.created_at)
+        reason = (latest_ds.diagnosis if latest_ds else None) or "—"
+        ward = _ward_from_appointments(list(p.appointments))
+        rows.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "phone": p.phone,
+                "dob": p.dob,
+                "status": p.status,
+                "risk_level": p.risk_level,
+                "created_at": p.created_at,
+                "reason": reason,
+                "ward": ward,
+                "age": _age_from_dob(p.dob),
+            }
+        )
+    return rows
 
 
 async def get_patient_detail(

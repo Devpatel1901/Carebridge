@@ -18,6 +18,13 @@ export interface PatientSummary {
   status: string;
   risk_level: string | null;
   created_at: string | null;
+  dob?: string | null;
+  /** Latest discharge diagnosis — ward table "Reason". */
+  reason?: string | null;
+  /** Ward/bed from latest appointment notes (see demo seed). */
+  ward?: string | null;
+  /** Server-computed age from `dob`. */
+  age?: number | null;
 }
 
 export interface PatientDetail {
@@ -49,7 +56,8 @@ export interface PatientDetail {
     id: string;
     interaction_type: string;
     channel: string;
-    responses: { question_id: string; question_text: string; answer: string }[] | null;
+    /** Backend may store `question` (from event pipeline) or `question_text`. */
+    responses: { question_id?: string; question_text?: string; question?: string; answer: string }[] | null;
     created_at: string;
   }[];
   alerts: {
@@ -102,6 +110,24 @@ export interface TimelineEntry {
   details: Record<string, unknown>;
 }
 
+export interface DischargeIntakeRequest {
+  patient_name: string;
+  patient_phone: string;
+  patient_dob: string | null;
+  patient_email: string | null;
+  discharge_summary_text: string;
+  /** When set, intake updates this patient row instead of creating a new id (matches seeded/demo IDs). */
+  existing_patient_id?: string | null;
+}
+
+export interface DischargeIntakeResponse {
+  patient_id: string;
+  risk_level: string;
+  decision: string;
+  generated_questions: unknown[];
+  correlation_id: string;
+}
+
 export const api = {
   getPatients: () => fetchJson<PatientSummary[]>(`${DB_AGENT_URL}/patients`),
   getPatient: (id: string) => fetchJson<PatientDetail>(`${DB_AGENT_URL}/patients/${id}`),
@@ -115,4 +141,10 @@ export const api = {
     fetchJson<TimelineEntry[]>(`${DB_AGENT_URL}/patients/${patientId}/timeline`),
   triggerFollowup: (patientId: string) =>
     fetchJson<{ status: string }>(`${SCHEDULER_URL}/trigger/${patientId}`, { method: "POST" }),
+  /** Brain Agent — same pipeline as scripts/demo_flow.py step 1. Returns new patient_id. */
+  ingestDischarge: (body: DischargeIntakeRequest) =>
+    fetchJson<DischargeIntakeResponse>(`${BRAIN_AGENT_URL}/intake`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shared.events.contracts import (
     AlertType,
@@ -26,6 +26,10 @@ class DischargeIntakeRequest(BaseModel):
     patient_dob: str | None = None
     patient_email: str | None = None
     discharge_summary_text: str
+    existing_patient_id: str | None = Field(
+        default=None,
+        description="When set, Brain intake uses this patient id (upsert) instead of a new UUID.",
+    )
 
 
 class DischargeIntakeResponse(BaseModel):
