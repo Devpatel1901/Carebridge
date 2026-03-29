@@ -1,17 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Building2, ChevronRight, FileText, Mail, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { PatientDetail } from "@/lib/api";
-import { staticPatients } from "@/components/carebridge/patient-management-static";
+import { ageFromIsoDob } from "@/lib/patient-utils";
 import { DischargeUploadModal } from "@/components/carebridge/discharge-upload-modal";
-
-type StaticRow = (typeof staticPatients)[number];
 
 type Props = {
   patient: PatientDetail;
-  demoRow: StaticRow | undefined;
   intakeBusy: boolean;
   onDischargeFile: (text: string) => Promise<void>;
 };
@@ -25,21 +22,30 @@ function formatPhoneDisplay(phone: string | undefined | null) {
   return phone;
 }
 
-function patientIdLine(patient: PatientDetail, demoRow: StaticRow | undefined) {
-  if (demoRow) return `ID: ${demoRow.id}`;
+function patientIdLine(patient: PatientDetail) {
   if (/^\d+$/.test(patient.id)) return `ID: ${patient.id}`;
   return `ID: ${patient.id.slice(0, 8)}…`;
 }
 
-export function PatientDetailRightRail({ patient, demoRow, intakeBusy, onDischargeFile }: Props) {
+function wardFromAppointments(patient: PatientDetail): string {
+  const apts = [...patient.appointments].sort((a, b) => {
+    const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return tb - ta;
+  });
+  const withNotes = apts.find((a) => a.notes?.trim());
+  return withNotes?.notes?.trim() ?? "—";
+}
+
+export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
 
-  const statusLabel = demoRow?.status ?? patient.status ?? "—";
+  const statusLabel = patient.status ?? "—";
   const statusUpper = statusLabel.toUpperCase();
-  const diagnosis = patient.discharge_summary?.diagnosis ?? demoRow?.reason ?? "—";
-  const wardBed = demoRow?.ward ?? "—";
-  const ageGender =
-    demoRow != null ? `${demoRow.age}y, ${demoRow.gender === "M" ? "Male" : demoRow.gender === "F" ? "Female" : demoRow.gender}` : "—";
+  const diagnosis = patient.discharge_summary?.diagnosis ?? "—";
+  const wardBed = useMemo(() => wardFromAppointments(patient), [patient]);
+  const age = ageFromIsoDob(patient.dob);
+  const ageGender = age != null ? `${age}y · —` : "—";
 
   const dischargeNote =
     statusLabel === "Recovering"
@@ -52,7 +58,6 @@ export function PatientDetailRightRail({ patient, demoRow, intakeBusy, onDischar
     <>
       <aside className="order-2 flex w-full shrink-0 flex-col border-t border-[#e8e8e8] bg-white md:min-h-[calc(100vh-52px)] md:w-[min(100%,360px)] md:max-w-[360px] md:border-l md:border-t-0">
         <div className="flex flex-1 flex-col gap-0 overflow-y-auto">
-          {/* Patient Information */}
           <section className="px-4 py-5 sm:px-5 md:px-6 md:py-6">
             <h2 className="text-base font-bold text-[#1a1a1a]">Patient Information</h2>
             <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#999]">Patient summary</p>
@@ -68,7 +73,7 @@ export function PatientDetailRightRail({ patient, demoRow, intakeBusy, onDischar
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="shrink-0 text-[#666]">Patient ID</dt>
-                <dd className="text-right font-bold text-[#1a1a1a]">{patientIdLine(patient, demoRow)}</dd>
+                <dd className="text-right font-bold text-[#1a1a1a]">{patientIdLine(patient)}</dd>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <dt className="text-[#666]">Status</dt>
@@ -117,7 +122,6 @@ export function PatientDetailRightRail({ patient, demoRow, intakeBusy, onDischar
 
           <div className="h-px bg-[#eee]" />
 
-          {/* Care Team */}
           <section className="px-4 py-5 sm:px-5 md:px-6 md:py-6">
             <h2 className="text-base font-bold text-[#1a1a1a]">Care Team</h2>
 
@@ -190,7 +194,6 @@ export function PatientDetailRightRail({ patient, demoRow, intakeBusy, onDischar
 
           <div className="h-px bg-[#eee]" />
 
-          {/* Reports */}
           <section className="px-4 pb-8 pt-5 sm:px-5 md:px-6 md:pb-10 md:pt-6">
             <h2 className="text-base font-bold text-[#1a1a1a]">Reports</h2>
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#e8e8e8] bg-[#f5f5f5] px-3 py-3 text-[13px] text-[#555]">

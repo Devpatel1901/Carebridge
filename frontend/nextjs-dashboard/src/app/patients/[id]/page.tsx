@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SeverityBadge } from "@/components/severity-badge";
 import { api, PatientDetail } from "@/lib/api";
-import { buildDemoPatientDetail, findStaticPatient } from "@/lib/demo-patient";
 import { PatientDetailRightRail } from "@/components/carebridge/patient-detail-right-rail";
 
 const tabListClass =
@@ -32,15 +31,7 @@ export default function PatientDetailPage() {
   const [intakeBusy, setIntakeBusy] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
-  const demoRow = useMemo(() => findStaticPatient(id), [id]);
-
-  const patient = useMemo(() => {
-    if (apiPatient) return apiPatient;
-    if (demoRow) return buildDemoPatientDetail(demoRow);
-    return null;
-  }, [apiPatient, demoRow]);
-
-  const isLive = Boolean(apiPatient);
+  const patient = apiPatient;
 
   const fetchPatient = useCallback(async () => {
     try {
@@ -110,7 +101,7 @@ export default function PatientDetailPage() {
       <div className={layoutRow}>
         <div className="flex flex-1 flex-col justify-center px-4 py-12 sm:px-8">
           <h1 className="text-xl font-bold text-[#1a1a1a]">Patient not found</h1>
-          <p className="mt-2 text-sm text-[#888]">No matching demo profile and no API record for this ID.</p>
+          <p className="mt-2 text-sm text-[#888]">No patient record for this ID in the database.</p>
           <Link href="/" className="mt-4 text-sm font-medium text-[#2d6a2e] hover:underline">
             Back to Patient Management
           </Link>
@@ -178,11 +169,11 @@ export default function PatientDetailPage() {
               <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
                 <div>
                   <span className="text-[#888]">Reason for admission</span>
-                  <p className="font-medium text-[#1a1a1a]">{demoRow?.reason ?? patient.discharge_summary?.diagnosis ?? "—"}</p>
+                  <p className="font-medium text-[#1a1a1a]">{patient.discharge_summary?.diagnosis ?? "—"}</p>
                 </div>
                 <div>
                   <span className="text-[#888]">Admission date</span>
-                  <p className="text-[#333]">{isLive ? "See EHR" : "— (demo)"}</p>
+                  <p className="text-[#333]">See EHR</p>
                 </div>
                 <div>
                   <span className="text-[#888]">Proposed discharge</span>
@@ -190,7 +181,7 @@ export default function PatientDetailPage() {
                 </div>
                 <div>
                   <span className="text-[#888]">Length of stay</span>
-                  <p className="text-[#333]">{demoRow ? "9 days (demo)" : "—"}</p>
+                  <p className="text-[#333]">—</p>
                 </div>
               </CardContent>
             </Card>
@@ -218,7 +209,7 @@ export default function PatientDetailPage() {
                 <CardContent className="space-y-2 text-sm text-[#333]">
                   <p>
                     <span className="text-[#888]">Primary: </span>
-                    {patient.discharge_summary?.diagnosis ?? demoRow?.reason}
+                    {patient.discharge_summary?.diagnosis ?? "—"}
                   </p>
                   <p className="text-xs text-[#888]">Secondary considerations reviewed per protocol.</p>
                 </CardContent>
@@ -441,7 +432,7 @@ export default function PatientDetailPage() {
         </Tabs>
       </div>
 
-      <PatientDetailRightRail patient={patient} demoRow={demoRow} intakeBusy={intakeBusy} onDischargeFile={handleDischargeFile} />
+      <PatientDetailRightRail patient={patient} intakeBusy={intakeBusy} onDischargeFile={handleDischargeFile} />
     </div>
   );
 }

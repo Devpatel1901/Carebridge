@@ -18,6 +18,13 @@ export interface PatientSummary {
   status: string;
   risk_level: string | null;
   created_at: string | null;
+  dob?: string | null;
+  /** Latest discharge diagnosis — ward table "Reason". */
+  reason?: string | null;
+  /** Ward/bed from latest appointment notes (see demo seed). */
+  ward?: string | null;
+  /** Server-computed age from `dob`. */
+  age?: number | null;
 }
 
 export interface PatientDetail {

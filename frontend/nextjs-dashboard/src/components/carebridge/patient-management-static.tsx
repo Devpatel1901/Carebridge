@@ -2,15 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-
-/** Demo census — limited to 5 rows (Figma) to avoid table/page scrollbars; phones kept for discharge intake. */
-export const staticPatients = [
-  { id: "1024587", name: "Sarah Chen", age: 42, gender: "F", phone: "+15551024587", email: "sarah.chen@demo.com", reason: "Head Trauma", status: "High Risk", ward: "ICU-3" },
-  { id: "7658321", name: "Omar Farooq", age: 40, gender: "M", phone: "+15557658321", reason: "Heart Failure", status: "Discharged", ward: "R-18" },
-  { id: "2156793", name: "David Lee", age: 67, gender: "M", phone: "+15552156793", email: "d.lee@demo.com", reason: "Pneumonia", status: "Recovering", ward: "G-12 / Bed A" },
-  { id: "3298461", name: "Ayesha Begum", age: 87, gender: "F", phone: "+15553298461", reason: "Post-Op Recovery", status: "Stable", ward: "R-14" },
-  { id: "4532109", name: "Habib Chowdhury", age: 28, gender: "M", phone: "+15554532109", reason: "Post-Op Recovery", status: "Stable", ward: "ICU-9" },
-];
+import type { PatientSummary } from "@/lib/api";
 
 /** Figma filter chips (screenshot 1). */
 const filters = ["All", "Recovery", "High Risk", "Stable", "Discharged"] as const;
@@ -26,18 +18,9 @@ export const statusColors: Record<string, { bg: string; text: string }> = {
 const inHospital = (s: string) =>
   ["Admitted", "High Risk", "Recovering", "Stable"].includes(s);
 
-/** Figma dashboard home (screenshot): fixed headline numbers. */
-export function getFigmaHomeStats() {
-  return [
-    { label: "Total Patients", value: 8 },
-    { label: "Emergency", value: 1 },
-    { label: "Recovery", value: 1 },
-    { label: "High-Risk", value: 2 },
-  ] as const;
-}
-
-export function getDashboardStats() {
-  const rows = staticPatients;
+/** Stats derived from DB-backed patient list (same source as the table). */
+export function computeDashboardStats(patients: PatientSummary[]) {
+  const rows = patients;
   const admittedLike = rows.filter((p) => inHospital(p.status)).length;
   const highRisk = rows.filter((p) => p.status === "High Risk").length;
   const recovery = rows.filter((p) => p.status === "Recovering").length;
@@ -45,6 +28,20 @@ export function getDashboardStats() {
     { label: "Total Patients", value: rows.length },
     { label: "Admitted / In-house", value: admittedLike },
     { label: "In Recovery", value: recovery },
+    { label: "High-Risk", value: highRisk },
+  ] as const;
+}
+
+/** Figma-style headline stats from live data (Emergency ≈ High Risk for demo). */
+export function computeFigmaHomeStats(patients: PatientSummary[]) {
+  const total = patients.length;
+  const emergency = patients.filter((p) => p.status === "High Risk" || p.risk_level === "high").length;
+  const recovery = patients.filter((p) => p.status === "Recovering").length;
+  const highRisk = patients.filter((p) => p.status === "High Risk").length;
+  return [
+    { label: "Total Patients", value: total },
+    { label: "Emergency", value: emergency },
+    { label: "Recovery", value: recovery },
     { label: "High-Risk", value: highRisk },
   ] as const;
 }
@@ -72,8 +69,15 @@ export function PatientManagementHeader() {
   );
 }
 
-export function PatientStatCards({ variant = "default" }: { variant?: "default" | "figma" }) {
-  const stats = variant === "figma" ? getFigmaHomeStats() : getDashboardStats();
+type PatientStatCardsProps = {
+  variant?: "default" | "figma";
+  /** From `GET /patients` — must match the ward table. */
+  patients: PatientSummary[];
+};
+
+export function PatientStatCards({ variant = "default", patients }: PatientStatCardsProps) {
+  const stats =
+    variant === "figma" ? computeFigmaHomeStats(patients) : computeDashboardStats(patients);
   return (
     <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
       {stats.map((stat) => (
@@ -89,17 +93,22 @@ export function PatientStatCards({ variant = "default" }: { variant?: "default" 
   );
 }
 
+type PatientTableLoadState = "loading" | "error" | "ok";
+
 type PatientStaticTableCardProps = {
-  /** Highlights the row when viewing this patient in the app (route id). */
+  patients: PatientSummary[];
+  loadState: PatientTableLoadState;
+  /** Highlights the row when viewing this patient (optional). */
   highlightPatientId?: string;
 };
 
-export function PatientStaticTableCard({ highlightPatientId }: PatientStaticTableCardProps) {
+export function PatientStaticTableCard({ patients, loadState, highlightPatientId }: PatientStaticTableCardProps) {
   const [activeFilter, setActiveFilter] = useState<string>("All");
   const [searchQuery, setSearchQuery] = useState("");
 
   const filteredPatients = useMemo(() => {
-    return staticPatients.filter((p) => {
+    return patients.filter((p) => {
+      const reason = p.reason ?? "";
       const matchesFilter =
         activeFilter === "All" ||
         p.status === activeFilter ||
@@ -108,10 +117,10 @@ export function PatientStaticTableCard({ highlightPatientId }: PatientStaticTabl
         searchQuery === "" ||
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         p.id.includes(searchQuery) ||
-        p.reason.toLowerCase().includes(searchQuery.toLowerCase());
+        reason.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesFilter && matchesSearch;
     });
-  }, [activeFilter, searchQuery]);
+  }, [activeFilter, searchQuery, patients]);
 
   return (
     <div className="overflow-hidden rounded-xl border border-[#e8e8e8] bg-white shadow-sm sm:rounded-[14px]">
@@ -132,6 +141,7 @@ export function PatientStaticTableCard({ highlightPatientId }: PatientStaticTabl
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search by name, ID, or condition..."
             className="w-full rounded-[10px] border border-[#e0e0e0] bg-[#fafafa] py-2.5 pl-10 pr-3.5 text-[13px] text-[#555] outline-none transition-shadow placeholder:text-[#999] focus:border-[#2d6a2e] focus:ring-2 focus:ring-[#2d6a2e]/20 sm:text-[13.5px]"
+            disabled={loadState !== "ok"}
           />
         </div>
       </div>
@@ -169,52 +179,77 @@ export function PatientStaticTableCard({ highlightPatientId }: PatientStaticTabl
               </tr>
             </thead>
             <tbody>
-              {filteredPatients.map((p) => {
-                const isCurrent = highlightPatientId && p.id === highlightPatientId;
-                return (
-                  <tr
-                    key={p.id}
-                    className={`border-b border-[#f0f0f0] transition-colors duration-150 hover:bg-[#fafafa] ${
-                      isCurrent ? "bg-[#e8f5e9]/80" : ""
-                    }`}
-                  >
-                    <td className="whitespace-nowrap px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
-                      {p.id}
-                    </td>
-                    <td className="min-w-[140px] px-4 py-4 sm:px-[22px]">
-                      <div className="text-sm font-semibold text-[#1a1a1a]">{p.name}</div>
-                      <div className="mt-0.5 text-[12.5px] text-[#999]">
-                        {p.age}y · {p.gender}
-                      </div>
-                    </td>
-                    <td className="max-w-[220px] px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
-                      <span className="line-clamp-2">{p.reason}</span>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-4 sm:px-[22px]">
-                      <span
-                        className="inline-block rounded-full px-3.5 py-1 text-[12.5px] font-medium"
-                        style={{
-                          background: statusColors[p.status]?.bg ?? "#eee",
-                          color: statusColors[p.status]?.text ?? "#555",
-                        }}
-                      >
-                        {p.status}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
-                      {p.ward}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-4 sm:px-[22px]">
-                      <Link
-                        href={`/patients/${p.id}`}
-                        className="inline-flex rounded-lg border border-[#2d6a2e]/50 bg-[#e8f5e9] px-[18px] py-[7px] text-[13px] font-semibold text-[#2d6a2e] transition-colors duration-200 hover:bg-[#d4ecd6]"
-                      >
-                        View Details
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
+              {loadState === "loading" && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center text-[13.5px] text-[#888] sm:px-[22px]">
+                    Loading patients…
+                  </td>
+                </tr>
+              )}
+              {loadState === "error" && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center text-[13.5px] text-red-600 sm:px-[22px]">
+                    Could not load patients. Is the DB Agent running at {process.env.NEXT_PUBLIC_DB_AGENT_URL || "http://localhost:8003"}?
+                  </td>
+                </tr>
+              )}
+              {loadState === "ok" && filteredPatients.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center text-[13.5px] text-[#888] sm:px-[22px]">
+                    No patients match your filters.
+                  </td>
+                </tr>
+              )}
+              {loadState === "ok" &&
+                filteredPatients.map((p) => {
+                  const isCurrent = highlightPatientId && p.id === highlightPatientId;
+                  const age = p.age ?? null;
+                  const reason = p.reason ?? "—";
+                  const ward = p.ward ?? "—";
+                  return (
+                    <tr
+                      key={p.id}
+                      className={`border-b border-[#f0f0f0] transition-colors duration-150 hover:bg-[#fafafa] ${
+                        isCurrent ? "bg-[#e8f5e9]/80" : ""
+                      }`}
+                    >
+                      <td className="whitespace-nowrap px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
+                        {p.id}
+                      </td>
+                      <td className="min-w-[140px] px-4 py-4 sm:px-[22px]">
+                        <div className="text-sm font-semibold text-[#1a1a1a]">{p.name}</div>
+                        <div className="mt-0.5 text-[12.5px] text-[#999]">
+                          {age != null ? `${age}y` : "—"} · —
+                        </div>
+                      </td>
+                      <td className="max-w-[220px] px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
+                        <span className="line-clamp-2">{reason}</span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-4 sm:px-[22px]">
+                        <span
+                          className="inline-block rounded-full px-3.5 py-1 text-[12.5px] font-medium"
+                          style={{
+                            background: statusColors[p.status]?.bg ?? "#eee",
+                            color: statusColors[p.status]?.text ?? "#555",
+                          }}
+                        >
+                          {p.status}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
+                        {ward}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-4 sm:px-[22px]">
+                        <Link
+                          href={`/patients/${p.id}`}
+                          className="inline-flex rounded-lg border border-[#2d6a2e]/50 bg-[#e8f5e9] px-[18px] py-[7px] text-[13px] font-semibold text-[#2d6a2e] transition-colors duration-200 hover:bg-[#d4ecd6]"
+                        >
+                          View Details
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>

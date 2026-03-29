@@ -1,8 +1,8 @@
 """
-Demo patient records aligned with the dashboard static census (`staticPatients` in the Next.js app).
+Demo patient records for SQLite seeding — single source of truth for IDs, names, phones, and clinical rows.
 
-Each `id` matches the Patient ID shown in the ward table so `/patients/{id}` resolves to the same row
-in SQLite after seeding. Use `existing_patient_id` on Brain `/intake` to update these rows in place.
+The Next.js home table loads from `GET /patients` (DB Agent), so ward list IDs and labels match this data
+after seed. Use `existing_patient_id` on Brain `/intake` to update these rows in place.
 """
 
 from __future__ import annotations
