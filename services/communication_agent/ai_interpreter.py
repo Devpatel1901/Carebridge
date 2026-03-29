@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
@@ -168,3 +169,114 @@ async def interpret_speech_response(
             needs_clarification=False,
             clarification_question=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# Appointment slot choice interpreter
+# ---------------------------------------------------------------------------
+
+class AppointmentChoice(BaseModel):
+    chosen_slot_index: int | None = None
+    preferred_time: str | None = None
+    needs_clarification: bool = False
+    clarification_question: str | None = None
+
+
+_APPT_SYSTEM_PROMPT = """\
+You are an AI assistant helping a patient choose an appointment time over the phone.
+The patient was offered numbered time slots and spoken a response.
+
+Your job is to:
+1. Determine if the patient selected one of the offered slots (by number, day, or time).
+2. If they expressed a different preferred time (e.g. "Friday afternoon"), capture it.
+3. If the response is too unclear, request clarification.
+
+Respond ONLY with valid JSON — no markdown fences, no commentary:
+{
+  "chosen_slot_index": <0-based integer index of chosen slot, or null>,
+  "preferred_time": "<patient's expressed preferred time if no slot chosen, or null>",
+  "needs_clarification": true|false,
+  "clarification_question": "<short follow-up question or null>"
+}
+
+Rules:
+- chosen_slot_index is 0-based (Option 1 → 0, Option 2 → 1, Option 3 → 2).
+- If patient says "option 1" / "the first one" / "Monday" (matching slot 1) → chosen_slot_index: 0.
+- If patient says "none of these" / "what about Friday" → chosen_slot_index: null, preferred_time: "Friday".
+- Only set needs_clarification=true if response is genuinely unintelligible.
+"""
+
+
+def _llm_interpret_appt_choice(
+    speech_result: str,
+    slots: list[dict[str, Any]],
+) -> AppointmentChoice:
+    """Synchronous Claude call — run via asyncio.to_thread."""
+    from langchain_anthropic import ChatAnthropic
+
+    settings = get_settings()
+    llm = ChatAnthropic(
+        model="claude-sonnet-4-20250514",
+        api_key=settings.anthropic_api_key,
+        temperature=0,
+        max_tokens=256,
+        default_request_timeout=ANTHROPIC_HTTP_TIMEOUT_SEC,
+    )
+
+    slots_text = "\n".join(
+        f"Option {i + 1} (index {i}): {s['slot_start']} with {s['doctor_name']}"
+        for i, s in enumerate(slots)
+    )
+    user_prompt = (
+        f"Offered slots:\n{slots_text}\n\n"
+        f"Patient's spoken response: {speech_result!r}"
+    )
+
+    messages = [
+        SystemMessage(content=_APPT_SYSTEM_PROMPT),
+        HumanMessage(content=user_prompt),
+    ]
+
+    response = llm.invoke(messages)
+    text = response.content if isinstance(response.content, str) else str(response.content)
+    text = text.strip()
+    if text.startswith("```"):
+        newline = text.index("\n")
+        text = text[newline + 1:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+    data = json.loads(text)
+    return AppointmentChoice(**data)
+
+
+async def interpret_appointment_choice(
+    speech_result: str,
+    slots: list[dict[str, Any]],
+) -> AppointmentChoice:
+    """Async wrapper for appointment slot choice interpretation."""
+    if not speech_result.strip():
+        return AppointmentChoice(
+            needs_clarification=True,
+            clarification_question="I didn't catch that. Which option would you prefer?",
+        )
+
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_llm_interpret_appt_choice, speech_result, slots),
+            timeout=LLM_TIMEOUT_SEC,
+        )
+        logger.info(
+            "interpret_appointment_choice.done",
+            chosen_slot_index=result.chosen_slot_index,
+            preferred_time=result.preferred_time,
+            needs_clarification=result.needs_clarification,
+        )
+        return result
+    except asyncio.TimeoutError:
+        logger.warning("interpret_appointment_choice.timeout")
+        return AppointmentChoice(needs_clarification=True, clarification_question="Sorry, could you repeat which option you prefer?")
+    except Exception:
+        logger.exception("interpret_appointment_choice.error")
+        return AppointmentChoice(needs_clarification=True, clarification_question="Could you please repeat which option works for you?")

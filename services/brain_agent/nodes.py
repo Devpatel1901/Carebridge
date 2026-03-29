@@ -14,7 +14,9 @@ from shared.events.contracts import (
     RiskLevel,
     Severity,
 )
+from shared.config import get_settings
 from shared.logging import get_logger
+from shared.questionnaire_defaults import APPOINTMENT_CONSENT_QUESTION
 from services.brain_agent.llm import get_llm
 
 logger = get_logger("brain_agent.nodes")
@@ -77,7 +79,6 @@ _DECISION_MAP = {
     "followup_needed": DecisionType.FOLLOWUP_NEEDED,
     "alert": DecisionType.ALERT,
     "escalation": DecisionType.ESCALATION,
-    "appointment_required": DecisionType.APPOINTMENT_REQUIRED,
 }
 
 
@@ -278,6 +279,9 @@ def questionnaire_generation_node(state: BrainState) -> dict[str, Any]:
             }
         ]
 
+    # Always append the fixed appointment consent question as the last question
+    questions.append({**APPOINTMENT_CONSENT_QUESTION})
+
     return {"generated_questions": questions}
 
 
@@ -290,6 +294,9 @@ def response_analysis_node(state: BrainState) -> dict[str, Any]:
     patient_response = state.get("patient_response", {})
     responses = patient_response.get("responses", [])
     diagnosis_context = patient_response.get("diagnosis", "Unknown")
+
+    # Exclude the consent question — it is not a clinical signal
+    responses = [r for r in responses if r.get("question_id") != "q_appt_consent"]
 
     logger.info(
         "response_analysis_node.start",
@@ -370,11 +377,18 @@ def decision_node(state: BrainState) -> dict[str, Any]:
         "You are a clinical decision engine. Based on the risk evaluation and "
         "(if available) the response analysis, decide the next action.\n\n"
         "Decision types:\n"
-        "- stable: Patient is doing well, continue normal follow-up.\n"
-        "- followup_needed: Schedule an additional follow-up sooner.\n"
-        "- alert: Create a clinical alert for the care team.\n"
+        "- stable: Patient is doing well; do NOT schedule another proactive voice follow-up "
+        "from this check-in. Use this when responses show no symptoms, low concern, or recovery on track.\n"
+        "- followup_needed: Another proactive voice check-in is needed soon (symptoms or monitoring).\n"
+        "- alert: Create a clinical alert; use when symptoms or findings warrant care-team attention "
+        "(often together with followup_needed-level concern).\n"
         "- escalation: Urgent escalation to a provider.\n"
-        "- appointment_required: Schedule an in-person appointment.\n\n"
+        "- appointment_required: Rare — in-person visit when clinically necessary beyond the usual "
+        "voice consent flow (patients normally book via the last questionnaire question in the call).\n\n"
+        "Use stable only when the patient is clearly doing well. New or worsening symptoms (e.g. chest pain, "
+        "bruising, focal neuro signs) must NOT be stable—choose followup_needed, alert, or escalation as appropriate.\n\n"
+        "When response analysis is present: if overall concern is low and the patient reports feeling well "
+        "or no new symptoms, prefer stable unless there is a clear reason to call again soon.\n\n"
         "Respond ONLY with valid JSON:\n"
         "{\n"
         '  "decision_type": "stable|followup_needed|alert|escalation|appointment_required",\n'
@@ -423,6 +437,7 @@ def decision_node(state: BrainState) -> dict[str, Any]:
 # Node 7 – Action Generation
 # ---------------------------------------------------------------------------
 
+
 _SEVERITY_MAP = {
     "low": Severity.LOW,
     "medium": Severity.MEDIUM,
@@ -432,6 +447,15 @@ _SEVERITY_MAP = {
 
 
 def _followup_delay(urgency: str) -> timedelta:
+    settings = get_settings()
+    if settings.demo_mode:
+        minutes = {
+            "low": settings.demo_followup_minutes_low,
+            "medium": settings.demo_followup_minutes_medium,
+            "high": settings.demo_followup_minutes_high,
+            "critical": settings.demo_followup_minutes_critical,
+        }.get(urgency, settings.demo_followup_minutes_medium)
+        return timedelta(minutes=int(minutes))
     return {
         "low": timedelta(days=3),
         "medium": timedelta(days=1),
@@ -534,25 +558,30 @@ def action_generation_node(state: BrainState) -> dict[str, Any]:
             "metadata": {"reason": reasoning},
         })
 
-    # Schedule next follow-up; tag response-chain events so demo mode uses real delay
-    delay = _followup_delay(urgency)
-    actions.append({
-        "type": "schedule_event",
-        "patient_id": patient_id,
-        "correlation_id": correlation_id,
-        "job_type": JobType.FOLLOWUP.value,
-        "scheduled_at": (datetime.now(timezone.utc) + delay).isoformat(),
-        "metadata": {
-            "decision_type": decision_type,
-            "urgency": urgency,
-            "from_response_chain": is_response_chain,
-        },
-    })
+    # Intake always schedules the first outbound follow-up. After a voice check-in, schedule
+    # another call for any non-stable decision (symptoms often surface as alert/escalation/
+    # appointment_required, not only followup_needed). stable = patient well, stop chaining.
+    schedule_voice_followup = (not is_response_chain) or (decision_type != "stable")
+    if schedule_voice_followup:
+        delay = _followup_delay(urgency)
+        actions.append({
+            "type": "schedule_event",
+            "patient_id": patient_id,
+            "correlation_id": correlation_id,
+            "job_type": JobType.FOLLOWUP.value,
+            "scheduled_at": (datetime.now(timezone.utc) + delay).isoformat(),
+            "metadata": {
+                "decision_type": decision_type,
+                "urgency": urgency,
+                "from_response_chain": is_response_chain,
+            },
+        })
 
     logger.info(
         "action_generation_node.done",
         patient_id=patient_id,
         action_count=len(actions),
+        schedule_voice_followup=schedule_voice_followup,
     )
 
     return {"actions": actions}

@@ -1,255 +1,291 @@
 # CareBridge
 
-Multi-agent, event-driven healthcare follow-up system. Built as a distributed architecture with 4 Python microservices, RabbitMQ messaging, Redis caching, SQLite persistence, and a Next.js dashboard.
+Post-discharge follow-up platform that combines structured clinical data, AI-assisted workflows, and real-time voice outreach so care teams can stay close to patients without adding manual busywork.
 
-## Architecture
+---
 
+## 1. Introduction
+
+### The problem
+
+Hospital discharge is a high-risk transition. Patients leave with dense instructions, new medications, and unclear red flags. Traditional “call us if anything changes” workflows break down when staff are stretched thin and patients are unsure what counts as urgent. Gaps in follow-up correlate with readmissions, avoidable complications, and poor experience.
+
+**CareBridge** targets that gap by:
+
+- **Structuring** discharge information (diagnosis, meds, risk signals).
+- **Generating** condition-relevant follow-up questions automatically.
+- **Reaching** patients through **scheduled, voice-based check-ins** (Twilio).
+- **Interpreting** spoken answers with an LLM pipeline and surfacing **alerts** and **next steps** to the care team on a live dashboard.
+
+### Who benefits
+
+| Audience | How they benefit |
+| -------- | ---------------- |
+| **Patients & families** | Clear, guided check-ins after leaving the hospital; questions tailored to their condition; a simple phone experience without installing an app. |
+| **Nurses & care coordinators** | A single view of who was contacted, what was said, and which responses triage as concerning—less phone-tag and manual scripting. |
+| **Physicians & clinical leadership** | Better visibility into post-discharge trajectory; alerts tied to structured interactions rather than ad hoc messages. |
+| **Health systems / innovation teams** | An event-driven, service-oriented reference stack they can extend (EHR hooks, policy layers, additional channels). |
+
+### Empowering people—not replacing them
+
+CareBridge is designed as **decision support and workflow automation**, not autonomous care:
+
+- **Clinicians define the clinical context** through discharge documentation; the system does not invent diagnoses.
+- **Risk and follow-up logic** produces **recommendations and alerts**; escalation paths remain under human policy.
+- **Voice interactions** gather patient-reported outcomes in natural language; **interpretation** assists triage, while **acknowledgment, charting, and medical decisions** stay with licensed staff.
+- The dashboard **amplifies attention** toward patients who may need outreach, instead of replacing the human relationship.
+
+---
+
+## 2. Core functionality & architecture
+
+### Core features
+
+| Area | What we built |
+| ---- | ------------- |
+| **Discharge intake** | API to submit discharge narrative; LangGraph + Claude extracts entities, assesses risk, proposes actions. |
+| **Disease-aware questionnaires** | LLM-generated follow-up questions stored per patient and reused for outbound calls. |
+| **Outbound voice follow-up** | Twilio outbound calls with TwiML; per-call Redis sessions; speech gather and turn-by-turn dialogue. |
+| **AI interpretation of speech** | Spoken answers interpreted (Claude) with clarification prompts when needed; structured events published on the bus. |
+| **Optional premium TTS** | ElevenLabs integration when `ELEVENLABS_API_KEY` is set; otherwise Amazon Polly via Twilio `<Say>`. |
+
+### High-level architecture
+
+```mermaid
+flowchart LR
+  subgraph Clinical["Clinical / ops"]
+    H[Hospital / EHR hook] -->|POST intake| B
+    U[Care team] --> D[Dashboard]
+  end
+
+  subgraph Core["CareBridge services"]
+    B[Brain Agent\nLangGraph + Claude]
+    C[Communication Agent\nTwilio Voice + Webhooks]
+    DB[(DB Agent\nSQLite)]
+    S[Scheduler\nAPScheduler]
+    R[(Redis)]
+    Q[(RabbitMQ)]
+  end
+
+  subgraph Patient["Patient"]
+    P[Phone]
+  end
+
+  H --> B
+  B --> Q
+  B --> DB
+  Q --> DB
+  Q --> S
+  S -->|trigger call| C
+  C -->|outbound call| P
+  P -->|speech| C
+  C --> R
+  C --> Q
+  B -->|analyze responses| Q
+  DB --> D
+  B --> DB
 ```
-Hospital → Brain Agent (LangGraph + Claude) → RabbitMQ → DB Agent → SQLite
-                                                      → Scheduler → Communication Agent → Twilio SMS/Voice → Patient
-                                                                                       ← Twilio Webhooks ←
-Patient responses → Brain Agent (risk analysis) → Alerts → Dashboard
-```
 
-### Services
+**Conceptual event flow**
 
+1. **Intake** — Discharge text → Brain parses, evaluates risk, generates questions → events → DB Agent persists → Scheduler may queue a follow-up.
+2. **Follow-up** — Scheduler (or manual trigger) calls Communication Agent → Twilio places call → TwiML drives questions → speech → Brain analyzes → alerts / next scheduling when decision is not **stable**.
+3. **Dashboard** — Frontend reads DB Agent (and related URLs) for patients, alerts, timeline, appointments.
 
-| Service             | Port | Description                                                                                                                                                    |
-| ------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Brain Agent         | 8001 | LangGraph pipeline with Claude: parses discharge summaries, evaluates risk, generates disease-specific questions, analyzes responses, makes clinical decisions |
-| Communication Agent | 8002 | Real Twilio SMS/Voice integration: sends follow-up questions, receives patient replies via webhooks                                                            |
-| DB Agent            | 8003 | Sole database writer: persists patients, discharge data, medications, questionnaires, interactions, alerts, appointments. REST API for dashboard               |
-| Scheduler           | 8004 | APScheduler: triggers follow-ups at scheduled times, subscribes to schedule events                                                                             |
-| Frontend            | 3000 | Next.js dashboard: patients, alerts, appointments, timeline                                                                                                    |
+> **Note:** The Communication Agent’s Twilio integration in this repository is **voice-centric** (webhooks under `/webhooks/voice/...`). Design your own SMS channel if you need text parity.
 
+### Service map
 
-### Event Flow
+| Service | Port | Role |
+| ------- | ---- | ---- |
+| **Brain Agent** | 8001 | LangGraph + Claude: intake, risk, questionnaires, response analysis, decisions. |
+| **Communication Agent** | 8002 | Twilio voice, webhooks, Redis call sessions, optional ElevenLabs TTS in TwiML. |
+| **DB Agent** | 8003 | SQLite access (single writer), REST CRUD, demo seed, migrations target. |
+| **Scheduler** | 8004 | Scheduled jobs, manual `POST /trigger/{patient_id}`, RabbitMQ consumers as configured. |
+| **Frontend** | 3000 | Next.js dashboard (`NEXT_PUBLIC_*` URLs point at published API ports). |
+| **RabbitMQ** | 5672 (AMQP), 15672 (management UI) | Message broker. |
+| **Redis** | 6379 | Cache / voice sessions. |
 
-1. **Discharge Intake**: Hospital submits summary → Brain Agent processes with Claude (parse → extract → risk eval → generate questions → decide → emit events) → DB Agent persists → Scheduler queues follow-up
-2. **Follow-up Loop**: Scheduler triggers → Communication Agent sends real SMS with disease-specific questions → Patient replies → Twilio webhooks → Brain Agent analyzes responses → Alerts if risk detected
-3. **Dashboard**: All data visible in real-time via Next.js frontend polling DB Agent
+### Follow-up timing (demo vs production)
 
-## Prerequisites
+- **`DEMO_MODE=true`** (default): Short delays for hackathon-style demos; Brain can emit follow-up schedules with minute-scale offsets; scheduler fallback uses `DEMO_FOLLOWUP_DELAY_SECONDS` when needed.
+- **`DEMO_MODE=false`**: Scheduler respects wall-clock **`scheduled_at`** on events.
 
-- **Python 3.12+** (installed via `uv`)
-- **Node.js 22+**
-- **uv** package manager
-- **RabbitMQ**: `brew install rabbitmq`
-- **Redis**: `brew install redis`
-- **ngrok**: `brew install ngrok` (for Twilio webhooks in local dev)
-- **Anthropic API key**
-- **Twilio account** (Account SID, Auth Token, Phone Number)
+After schema changes, run **`uv run alembic upgrade head`** (host) or ensure your Docker entrypoint runs migrations so tables like **`followup_jobs`** (with `correlation_id`, etc.) exist.
 
-## Setup
+---
+
+## 3. Technical setup
+
+### 3.1 Prerequisites
+
+**For Docker (recommended full stack)**
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose v2) with enough RAM for RabbitMQ + multiple Python services + Next build.
+- **Anthropic** API key ([Console](https://console.anthropic.com/)).
+- **Twilio** account: Account SID, Auth Token, a **voice-capable** phone number.
+- **Public HTTPS URL for webhooks** — for local dev, [ngrok](https://ngrok.com/) (or similar) exposing host port **8002**.
+- *(Optional)* **ElevenLabs** API key and voice ID for richer TTS (see `.env.example`).
+
+**For local (non-Docker) development**
+
+- **Python 3.12+** and **[uv](https://github.com/astral-sh/uv)**.
+- **Node.js 22+** and npm.
+- **RabbitMQ** and **Redis** running locally (or point env vars to remote instances).
+- Same API keys as above.
+
+### 3.2 Environment file
 
 ```bash
-# 1. Clone and enter project
-cd CareBridge
-
-# 2. Create virtual environment and install dependencies
-uv venv --python 3.12
-source .venv/bin/activate
-uv pip install -e "."
-
-# 3. Run database migrations
-alembic upgrade head
-
-# 4. Configure environment
 cp .env.example .env
-# Edit .env with your API keys:
-#   ANTHROPIC_API_KEY=sk-ant-...
-#   TWILIO_ACCOUNT_SID=AC...
-#   TWILIO_AUTH_TOKEN=...
-#   TWILIO_PHONE_NUMBER=+1...
-#   TWILIO_WEBHOOK_BASE_URL=https://your-ngrok-url.ngrok.io
-
-# 5. Install frontend dependencies
-cd frontend/nextjs-dashboard && npm install && cd ../..
-
-# 6. Start infrastructure
-brew services start rabbitmq
-brew services start redis
 ```
 
-## Docker (full stack)
+Edit **`.env`** minimally:
 
-Run **RabbitMQ, Redis, all four Python services, the Next.js dashboard, and a persisted SQLite volume** with one command from the **repository root**:
+| Variable | Purpose |
+| -------- | ------- |
+| `ANTHROPIC_API_KEY` | Claude (Brain Agent). |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` | Outbound voice + webhooks. |
+| `TWILIO_WEBHOOK_BASE_URL` | **HTTPS origin only**, no path, e.g. `https://abc-xyz.ngrok-free.app` — must match your tunnel to **port 8002**. |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | Optional TTS upgrade. |
+| `DEMO_MODE` | `true` for short demo delays (default). |
+
+Compose overrides infra URLs inside containers (`RABBITMQ_URL`, `REDIS_URL`, `DATABASE_URL`, service base URLs). You still need **`.env`** for secrets and `TWILIO_WEBHOOK_BASE_URL`.
+
+### 3.3 Run the full stack with Docker
+
+From the **repository root**:
 
 ```bash
-cp .env.example .env
-# Fill in ANTHROPIC_API_KEY, Twilio values, and TWILIO_WEBHOOK_BASE_URL (see below)
-
 docker compose up --build
 ```
 
-- **Dashboard**: [http://localhost:3000](http://localhost:3000) — the browser calls API URLs on `localhost:8001`, `8003`, `8004` (ports published from the containers).
-- **SQLite**: Stored in the Compose named volume `sqlite_data` (on disk it appears as `{project}_sqlite_data`, e.g. `carebridge_sqlite_data`). Only **db_agent** mounts it; other services use the DB Agent HTTP API (do not mount the same SQLite file on multiple writers).
-- **Demo census (5 patients)**: On first startup, the **DB Agent** seeds SQLite with five patients (`1024587`, `7658321`, …). The **home page ward table** loads **`GET /patients`** only (no duplicate static JSON), so Patient IDs and Reason/Ward columns match SQLite. Each seed row includes demographics, discharge summary, medications, questionnaire, and appointments. The seed runs once per volume; to reset, remove the volume (`docker volume rm carebridge_sqlite_data`) and `docker compose up --build` again. To disable seeding, set `SKIP_DEMO_SEED=1` for the `db_agent` service (see `.env.example`).
-- **Discharge upload**: The dashboard sends `existing_patient_id` to Brain `/intake` so a new discharge file **updates the same patient** instead of creating a random UUID.
-- **Legacy path**: `docker compose -f infra/docker-compose.yml` loads the same stack via an `include` of the root file.
+From **`infra/`**, you can run `docker compose -f docker-compose.yml up --build` — that file **includes** the root `docker-compose.yml`.
 
-#### Steps: verify demo data after `docker compose up --build`
+**What starts (each component):**
 
-1. Wait until `db_agent` is healthy (logs show `demo_seed_complete` on first run, or `demo_seed_skipped` if the volume already had data).
-2. Open [http://localhost:3000](http://localhost:3000), click **View Details** on e.g. David Lee (`2156793`).
-3. Confirm the detail page shows **David Lee**, **Pneumonia** / recovering context from the API (not only static placeholders). Optional: call `curl -s http://localhost:8003/patients/2156793 | jq .name,.discharge_summary.diagnosis`.
-4. **Re-seed from scratch**: `docker compose down`, `docker volume rm carebridge_sqlite_data`, then `docker compose up --build`.
-5. **Manual seed** (local SQLite file without Docker): from repo root, `DATABASE_URL=sqlite+aiosqlite:///./carebridge.db uv run python scripts/seed_sqlite_demo.py`.
+| Step | Component | What happens |
+| ---- | --------- | ------------ |
+| 1 | **Network** | Compose creates a bridge network; services resolve each other by name (`rabbitmq`, `redis`, `db_agent`, …). |
+| 2 | **RabbitMQ** | Broker on `5672`; management UI on **http://localhost:15672** (guest/guest). Health: AMQP listener ready. |
+| 3 | **Redis** | Cache on `6379`; health: `PING`. |
+| 4 | **DB Agent** | Builds from `infra/Dockerfile`; mounts volume **`sqlite_data`** → `/app/data/carebridge.db`; runs API on **8003**; seeds **five demo patients** on first empty DB unless `SKIP_DEMO_SEED=1`. |
+| 5 | **Brain Agent** | Waits for RabbitMQ + healthy `db_agent`; LangGraph + Claude on **8001**. |
+| 6 | **Communication Agent** | Waits for Redis, DB, Brain; Twilio + voice webhooks on **8002**. |
+| 7 | **Scheduler** | Waits for DB + Communication Agent; **8004**. |
+| 8 | **Frontend** | Next.js production image; **3000**; env points browser to `localhost:8001/8003/8004`. |
 
-### Twilio voice + ngrok with Docker
+**URLs (host machine):**
 
-Twilio must reach a **public HTTPS** URL. **`TWILIO_WEBHOOK_BASE_URL` must not** be `http://communication_agent:8002` (that hostname exists only inside Compose).
+- Dashboard: **http://localhost:3000**
+- Brain: http://localhost:8001/health  
+- Communication: http://localhost:8002/health  
+- DB Agent: http://localhost:8003/health  
+- Scheduler: http://localhost:8004/health  
 
-1. Start the stack: `docker compose up --build`.
-2. On the **host**, expose published port **8002**: `ngrok http 8002`.
-3. Set **`TWILIO_WEBHOOK_BASE_URL`** in `.env` to your ngrok **HTTPS** origin (no path), then restart the **communication_agent** container (or `docker compose up -d` again) so it picks up the value.
+**SQLite persistence:** Data lives in Docker volume `sqlite_data` (e.g. named `carebridge_sqlite_data`). Only **db_agent** mounts it—do not attach the same SQLite file to multiple writers.
 
-Verify TwiML is reachable:
+**Reset demo data:**  
+`docker compose down` then `docker volume rm carebridge_sqlite_data` (name may vary; use `docker volume ls`) and `docker compose up --build` again.
 
-```bash
-uv run python scripts/check_twilio_tunnel.py
-```
-
-### Scripts against Docker
-
-With default env vars, the same commands work from the **host** (they target `localhost` and the published ports):
-
-```bash
-uv run python scripts/demo_flow.py
-uv run python scripts/trigger_followup.py <patient_id>
-uv run python scripts/seed_data.py
-```
-
-To run the demo **inside** Compose with internal DNS (optional):
+**Included compose profile — tooling:** run the scripted demo **inside** the Compose network:
 
 ```bash
 docker compose --profile tooling run --rm tooling
 ```
 
-Override bases if needed (see [.env.example](.env.example)): `BRAIN_AGENT_URL`, `DB_AGENT_URL`, `SCHEDULER_URL`, `COMM_AGENT_URL`, `FRONTEND_URL`.
+This executes `scripts/demo_flow.py` with internal service hostnames.
 
-### Scaling note
+### 3.4 Twilio voice & ngrok (mandatory for real calls)
 
-SQLite implies a **single db_agent** instance with the data volume. To scale out multiple DB Agent replicas, move to a network database (e.g. **Postgres**) and update `DATABASE_URL` accordingly.
+Twilio’s cloud fetches TwiML over **HTTPS** from the **public internet**. Inside Compose, `http://communication_agent:8002` is **not** valid for `TWILIO_WEBHOOK_BASE_URL`.
 
-## Running
+1. Start the stack so port **8002** is published on the host: `docker compose up --build`.
+2. On the **host**, tunnel to Communication Agent:  
+   `ngrok http 8002`
+3. Copy the **HTTPS** forwarding URL (origin only, no path).
+4. Set `TWILIO_WEBHOOK_BASE_URL` in **`.env`** to that origin; restart Communication Agent (e.g. `docker compose up -d communication_agent scheduler`).
+5. Verify TwiML (from repo root, with `.env` loaded):
 
-You need 7 terminals (or use a process manager):
+   ```bash
+   uv run python scripts/check_twilio_tunnel.py
+   ```
+
+   Or manually:
+
+   ```bash
+   curl -sS -o /dev/null -w "%{http_code}\n" "https://YOUR_SUBDOMAIN.ngrok-free.app/webhooks/voice/twiml-smoke"
+   ```
+
+   Expect **200** and XML containing `<Response>`.
+
+**Common mistakes:** ngrok pointing at **3000** (frontend) instead of **8002**; stale ngrok URL after restart; extra **path** in `TWILIO_WEBHOOK_BASE_URL` (must be `https://host` only).
+
+### 3.5 Local development (without Docker)
+
+Use separate terminals or a process manager:
 
 ```bash
-# Terminal 1: ngrok tunnel for Twilio webhooks
+# 0. Python env
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -e "."
+
+# 1. Migrations
+alembic upgrade head
+
+# 2. Infrastructure
+brew services start rabbitmq   # or your OS equivalent
+brew services start redis
+
+# 3. ngrok (for Twilio)
 ngrok http 8002
-# Copy the https:// URL and update TWILIO_WEBHOOK_BASE_URL in .env
 
-# Terminal 2: DB Agent (start first - other services depend on it)
+# 4. Services (example ports)
 uv run uvicorn services.db_agent.main:app --port 8003 --reload
-
-# Terminal 3: Brain Agent
 uv run uvicorn services.brain_agent.main:app --port 8001 --reload
-
-# Terminal 4: Communication Agent
 uv run uvicorn services.communication_agent.main:app --port 8002 --reload
-
-# Terminal 5: Scheduler
 uv run uvicorn services.scheduler.main:app --port 8004 --reload
 
-# Terminal 6: Frontend Dashboard
-cd frontend/nextjs-dashboard && npm run dev
-
-# Terminal 7: Run the demo
-uv run python scripts/seed_data.py
+# 5. Frontend
+cd frontend/nextjs-dashboard && npm install && npm run dev
 ```
 
-## Demo Walkthrough
+Point **`.env`** at `localhost` URLs (see `.env.example` comments for `BRAIN_AGENT_URL`, etc.).
 
-### Step 1: Seed a discharge summary
-
-```bash
-uv run python scripts/seed_data.py
-```
-
-This sends a realistic cardiac patient discharge to the Brain Agent. Claude will:
-
-- Parse the discharge summary
-- Extract medications, diagnosis, procedures
-- Evaluate risk level (likely HIGH for STEMI)
-- Generate 4-6 cardiac-specific follow-up questions
-- Schedule follow-ups
-
-### Step 2: Check the dashboard
-
-Open [http://localhost:3000](http://localhost:3000) — you should see the patient with risk level and all data populated.
-
-### Step 3: Trigger a follow-up
+### 3.6 Useful scripts (host against Docker or local)
 
 ```bash
+uv run python scripts/demo_flow.py          # Intake + wait + trigger voice path
 uv run python scripts/trigger_followup.py <patient_id>
+uv run python scripts/seed_data.py          # Sample discharge to Brain
 ```
 
-Or use the "Trigger Follow-up SMS" button on the patient detail page. This sends real SMS to the patient's phone with the first disease-specific question.
+Override bases if needed: `BRAIN_AGENT_URL`, `COMM_AGENT_URL`, `DB_AGENT_URL`, `SCHEDULER_URL`, `FRONTEND_URL`.
 
-### Step 4: Reply via SMS
+### 3.7 Demo checklist (quick)
 
-Reply to the SMS from your phone. Each reply advances to the next question. After all questions are answered:
+1. `docker compose up --build` — wait for **healthy** containers.
+2. Open **http://localhost:3000** — confirm seeded patients (e.g. ward table IDs match DB).
+3. Run `uv run python scripts/demo_flow.py` **or** `POST http://localhost:8004/trigger/<patient_id>`.
+4. Ensure ngrok + `TWILIO_WEBHOOK_BASE_URL` for a real handset test.
 
-- Responses are published to RabbitMQ
-- Brain Agent analyzes responses with Claude
-- If risk detected → Alert created
-- All data reflected in the dashboard
+### 3.8 API reference (summary)
 
-### Full automated demo
+**Brain (`:8001`)** — `POST /intake`, `POST /evaluate-response`, `GET /patients/{id}/questions`, `GET /health`.
 
-```bash
-uv run python scripts/demo_flow.py
-```
+**Communication (`:8002`)** — `POST /initiate-call` (optional `schedule_correlation_id`), voice webhooks under `/webhooks/voice/*`, `GET /active-sessions`, `GET /health`.
 
-## API Reference
+**DB Agent (`:8003`)** — `GET /patients`, `GET /patients/{id}`, `POST /patients/{id}/schedule-followup`, `GET /alerts`, `PATCH /alerts/{id}/acknowledge`, `GET /followup-jobs`, `PATCH /followup-jobs/by-correlation/{correlation_id}`, `GET /patients/{id}/timeline`, `GET /patients/{id}/questionnaire`, `GET /health`.
 
-### Brain Agent (`:8001`)
+**Scheduler (`:8004`)** — `GET /jobs`, `POST /trigger/{patient_id}`, `GET /health`.
 
-- `POST /intake` — Process discharge summary
-- `POST /evaluate-response` — Evaluate patient responses
-- `GET /patients/{id}/questions` — Get generated questionnaire
-- `GET /health`
+### 3.9 Tech stack
 
-### Communication Agent (`:8002`)
+- Python **3.12**, **FastAPI**, **LangGraph**, **Anthropic Claude**, **Twilio**, **aio-pika** (RabbitMQ), **Redis**, **SQLite** + **SQLAlchemy 2** + **Alembic**, **structlog**, **uv**.
+- Frontend: **Next.js** (App Router), **TypeScript**, **Tailwind**, **shadcn/ui**.
 
-- `POST /initiate-call` — Start SMS/voice follow-up
-- `POST /webhooks/sms` — Twilio SMS webhook
-- `POST /webhooks/voice/start` — Twilio voice start
-- `POST /webhooks/voice/gather` — Twilio voice input
-- `GET /active-sessions`
-- `GET /health`
+### 3.10 Production notes
 
-### DB Agent (`:8003`)
-
-- `GET /patients` — List patients
-- `GET /patients/{id}` — Patient detail
-- `GET /alerts` — List alerts
-- `PATCH /alerts/{id}/acknowledge` — Acknowledge alert
-- `GET /appointments` — List appointments
-- `GET /patients/{id}/timeline` — Patient event timeline
-- `GET /patients/{id}/questionnaire` — Patient questionnaire
-- `GET /followup-jobs` — List scheduled jobs
-- `GET /health`
-
-### Scheduler (`:8004`)
-
-- `GET /jobs` — List scheduled jobs
-- `POST /trigger/{patient_id}` — Manual follow-up trigger
-- `GET /health`
-
-## Tech Stack
-
-- **Python 3.12** with FastAPI (async)
-- **LangGraph** for Brain Agent pipeline
-- **Anthropic Claude** for all LLM operations
-- **Twilio SDK** for real SMS and Voice
-- **RabbitMQ** (aio-pika) for event-driven messaging
-- **Redis** for session caching
-- **SQLite** (aiosqlite + SQLAlchemy 2.x) for persistence
-- **Alembic** for migrations
-- **Next.js 14** + TypeScript + Tailwind CSS + shadcn/ui
-- **structlog** for structured JSON logging with correlation IDs
-- **uv** for Python dependency management
-
+- **SQLite** implies a **single** DB Agent instance with the data volume; for horizontal scale or HA, migrate to **PostgreSQL** (or similar) and update `DATABASE_URL`.
+- Lock down **Twilio** webhook URLs, **rotate** keys, and enforce **HTTPS** only.
+- Add **authn/z** on public APIs and the dashboard before exposing beyond demos.

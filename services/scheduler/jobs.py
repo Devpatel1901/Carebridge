@@ -10,14 +10,26 @@ from shared.logging import get_logger
 logger = get_logger("scheduler.jobs")
 
 
-async def trigger_followup(patient_id: str, settings: Settings) -> dict[str, Any]:
+async def trigger_followup(
+    patient_id: str,
+    settings: Settings,
+    schedule_correlation_id: str | None = None,
+) -> dict[str, Any]:
     """Call Communication Agent to initiate a follow-up call. Returns its JSON body."""
-    logger.info("trigger_followup_start", patient_id=patient_id)
+    logger.info(
+        "trigger_followup_start",
+        patient_id=patient_id,
+        schedule_correlation_id=schedule_correlation_id,
+    )
+
+    body: dict[str, Any] = {"patient_id": patient_id}
+    if schedule_correlation_id:
+        body["schedule_correlation_id"] = schedule_correlation_id
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{settings.comm_agent_url}/initiate-call",
-            json={"patient_id": patient_id},
+            json=body,
         )
 
     if response.status_code == 200:

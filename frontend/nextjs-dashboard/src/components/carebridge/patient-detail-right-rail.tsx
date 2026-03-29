@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { PatientDetail } from "@/lib/api";
 import { ageFromIsoDob } from "@/lib/patient-utils";
 import { DischargeUploadModal } from "@/components/carebridge/discharge-upload-modal";
+import { statusColors } from "@/components/carebridge/patient-management-static";
 
 type Props = {
   patient: PatientDetail;
@@ -42,6 +43,7 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
 
   const statusLabel = patient.status ?? "—";
   const statusUpper = statusLabel.toUpperCase();
+  const statusStyle = statusColors[statusLabel] ?? { bg: "#eee", text: "#555" };
   const diagnosis = patient.discharge_summary?.diagnosis ?? "—";
   const wardBed = useMemo(() => wardFromAppointments(patient), [patient]);
   const age = ageFromIsoDob(patient.dob);
@@ -53,6 +55,16 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
       : statusLabel === "Discharged"
         ? "*Patient discharged — summary on file*"
         : "*In active care — review follow-up plan*";
+
+  const statusLower = statusLabel.trim().toLowerCase();
+  const isHighRiskStage = statusLower === "high risk";
+  const isDischarged = statusLower === "discharged";
+  const dischargeBlocked = isHighRiskStage || isDischarged;
+  const dischargeDisabledTitle = isHighRiskStage
+    ? "This patient is at high risk. Discharge intake is unavailable while status is High Risk."
+    : isDischarged
+      ? "This patient is already discharged. A discharge summary is on file."
+      : "";
 
   return (
     <>
@@ -78,7 +90,10 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <dt className="text-[#666]">Status</dt>
                 <dd>
-                  <span className="inline-block rounded-md bg-[#dbe8fd] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-[#1a4fd6]">
+                  <span
+                    className="inline-block rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+                    style={{ background: statusStyle.bg, color: statusStyle.text }}
+                  >
                     {statusUpper}
                   </span>
                 </dd>
@@ -110,14 +125,37 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
               </span>
             </button>
 
-            <Button
-              type="button"
-              onClick={() => setModalOpen(true)}
-              disabled={intakeBusy}
-              className="mt-5 h-11 w-full rounded-lg bg-[#2d5a43] text-[15px] font-semibold text-white shadow-sm hover:bg-[#244a36] disabled:opacity-60"
-            >
-              {intakeBusy ? "Processing…" : "Discharge Patient"}
-            </Button>
+            {dischargeBlocked ? (
+              <span
+                className="mt-5 block w-full cursor-not-allowed"
+                title={dischargeDisabledTitle}
+              >
+                <Button
+                  type="button"
+                  onClick={() => setModalOpen(true)}
+                  disabled
+                  className="h-11 w-full rounded-lg bg-[#2d5a43] text-[15px] font-semibold text-white shadow-sm disabled:opacity-60 pointer-events-none"
+                >
+                  {isDischarged ? "Already discharged" : "Discharge Patient"}
+                </Button>
+              </span>
+            ) : (
+              <Button
+                type="button"
+                onClick={() => setModalOpen(true)}
+                disabled={intakeBusy}
+                className="mt-5 h-11 w-full rounded-lg bg-[#2d5a43] text-[15px] font-semibold text-white shadow-sm hover:bg-[#244a36] disabled:opacity-60"
+              >
+                {intakeBusy ? "Processing…" : "Discharge Patient"}
+              </Button>
+            )}
+            {dischargeBlocked && isHighRiskStage && (
+              <p className="mt-2 text-[12px] leading-snug text-[#888]">
+                Discharge upload is unavailable while this patient is in{" "}
+                <span className="font-medium text-[#555]">High Risk</span> status. Stabilize or update
+                status before processing discharge.
+              </p>
+            )}
           </section>
 
           <div className="h-px bg-[#eee]" />

@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # LLM
     anthropic_api_key: str
 
+    # ElevenLabs TTS (optional — falls back to Polly if not set)
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "gJx1vCzNCD1EQHT212Ls"
+
     # Twilio
     twilio_account_sid: str
     twilio_auth_token: str
@@ -29,6 +33,13 @@ class Settings(BaseSettings):
 
     # App
     demo_mode: bool = True
+    # When demo_mode: first scheduled follow-up runs after this many seconds (default ~4 min).
+    demo_followup_delay_seconds: int = 240
+    # Chained follow-up spacing (minutes) when demo_mode — Brain schedule_event scheduled_at.
+    demo_followup_minutes_low: int = 1
+    demo_followup_minutes_medium: int = 2
+    demo_followup_minutes_high: int = 3
+    demo_followup_minutes_critical: int = 4
 
     # Service URLs (for inter-service HTTP calls)
     brain_agent_url: str = "http://localhost:8001"
@@ -37,6 +48,8 @@ class Settings(BaseSettings):
     scheduler_url: str = "http://localhost:8004"
 
     @field_validator(
+        "elevenlabs_api_key",
+        "elevenlabs_voice_id",
         "anthropic_api_key",
         "twilio_account_sid",
         "twilio_auth_token",

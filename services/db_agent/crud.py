@@ -14,6 +14,7 @@ from shared.db.models import (
     Appointment,
     AuditLog,
     DischargeSummary,
+    DoctorSchedule,
     EventStore,
     FollowupJob,
     Medication,
@@ -22,6 +23,7 @@ from shared.db.models import (
     Questionnaire,
 )
 from shared.logging import get_logger
+from shared.questionnaire_defaults import ensure_appointment_consent_question
 
 logger = get_logger("db_agent.crud")
 
@@ -69,6 +71,16 @@ def _id() -> str:
 # Patient
 # ---------------------------------------------------------------------------
 
+def _has_discharge_payload(discharge_data: Any) -> bool:
+    """True when intake includes discharge summary content (ward → discharged on file)."""
+    if not discharge_data or not isinstance(discharge_data, dict):
+        return False
+    return bool(
+        (str(discharge_data.get("raw_text") or "").strip())
+        or (str(discharge_data.get("diagnosis") or "").strip())
+    )
+
+
 async def upsert_patient(
     session: AsyncSession,
     patient_data: dict[str, Any],
@@ -80,6 +92,11 @@ async def upsert_patient(
     patient = result.scalar_one_or_none()
 
     demographics = patient_data.get("demographics", {})
+    discharge_data = patient_data.get("discharge_data")
+    status_from_discharge = (
+        "Discharged" if _has_discharge_payload(discharge_data) else None
+    )
+
     if patient is None:
         patient = Patient(
             id=patient_id,
@@ -87,7 +104,7 @@ async def upsert_patient(
             phone=demographics.get("phone", ""),
             dob=demographics.get("dob"),
             email=demographics.get("email"),
-            status="active",
+            status=status_from_discharge or "active",
             risk_level=patient_data.get("risk_level", "low"),
         )
         session.add(patient)
@@ -103,6 +120,8 @@ async def upsert_patient(
             patient.email = demographics["email"]
         if patient_data.get("risk_level"):
             patient.risk_level = patient_data["risk_level"]
+        if status_from_discharge:
+            patient.status = "Discharged"
         patient.updated_at = _now()
         logger.info("patient_updated", patient_id=patient_id)
 
@@ -249,11 +268,138 @@ async def create_appointment(
         scheduled_at=scheduled_at,
         status=data.get("status", "scheduled"),
         notes=data.get("notes"),
+        doctor_id=data.get("doctor_id"),
+        doctor_name=data.get("doctor_name"),
     )
     session.add(appt)
     await session.flush()
     logger.info("appointment_created", appt_id=appt.id, patient_id=appt.patient_id)
     return appt
+
+
+async def update_appointment(
+    session: AsyncSession,
+    appointment_id: str,
+    updates: dict[str, Any],
+) -> Appointment | None:
+    """Partially update an appointment's status, notes, or scheduling fields."""
+    result = await session.execute(
+        select(Appointment).where(Appointment.id == appointment_id)
+    )
+    appt = result.scalar_one_or_none()
+    if appt is None:
+        return None
+
+    allowed = {"status", "notes", "scheduled_at", "doctor_id", "doctor_name", "appointment_type"}
+    for field, value in updates.items():
+        if field not in allowed:
+            continue
+        if field == "scheduled_at" and isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        setattr(appt, field, value)
+
+    await session.flush()
+    logger.info("appointment_updated", appt_id=appt.id, updates=list(updates.keys()))
+    return appt
+
+
+async def get_available_slots(
+    session: AsyncSession,
+    urgency: str = "medium",
+    limit: int = 3,
+    doctor_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return the next N available doctor slots filtered by urgency window and optionally doctor."""
+    from datetime import timedelta
+    now = _now()
+    # Medium must exceed 7 days: seeded slots start the *next* Monday; early Monday UTC can
+    # place the first slot just past a naive 7-day cutoff (next Mon 9am vs Mon+7d 8am).
+    windows = {"high": timedelta(hours=48), "medium": timedelta(days=10), "low": timedelta(days=14)}
+    cutoff = now + windows.get(urgency, timedelta(days=7))
+
+    conditions = [
+        DoctorSchedule.status == "available",
+        DoctorSchedule.slot_start >= now,
+        DoctorSchedule.slot_start <= cutoff,
+    ]
+    if doctor_id:
+        conditions.append(DoctorSchedule.doctor_id == doctor_id)
+
+    result = await session.execute(
+        select(DoctorSchedule)
+        .where(*conditions)
+        .order_by(DoctorSchedule.slot_start)
+        .limit(limit)
+    )
+    slots = result.scalars().all()
+    return [
+        {
+            "id": s.id,
+            "doctor_id": s.doctor_id,
+            "doctor_name": s.doctor_name,
+            "slot_start": s.slot_start.isoformat(),
+            "slot_end": s.slot_end.isoformat(),
+            "status": s.status,
+        }
+        for s in slots
+    ]
+
+
+async def confirm_appointment_slot(
+    session: AsyncSession,
+    slot_id: str,
+    appointment_id: str,
+    patient_id: str,
+) -> dict[str, Any] | None:
+    """
+    Optimistic-lock confirm: marks the slot booked only if it is still available.
+    Returns the updated appointment dict, or None if the slot was already taken.
+    """
+    from sqlalchemy import update
+
+    result = await session.execute(
+        select(DoctorSchedule).where(
+            DoctorSchedule.id == slot_id,
+            DoctorSchedule.status == "available",
+        )
+    )
+    slot = result.scalar_one_or_none()
+    if slot is None:
+        logger.warning("confirm_slot.already_taken", slot_id=slot_id)
+        return None
+
+    slot.status = "booked"
+    slot.patient_id = patient_id
+    await session.flush()
+
+    appt_result = await session.execute(
+        select(Appointment).where(Appointment.id == appointment_id)
+    )
+    appt = appt_result.scalar_one_or_none()
+    if appt is None:
+        logger.error("confirm_slot.appointment_not_found", appointment_id=appointment_id)
+        return None
+
+    appt.scheduled_at = slot.slot_start
+    appt.doctor_id = slot.doctor_id
+    appt.doctor_name = slot.doctor_name
+    appt.status = "confirmed"
+    await session.flush()
+
+    logger.info(
+        "appointment_slot_confirmed",
+        appointment_id=appointment_id,
+        slot_id=slot_id,
+        scheduled_at=slot.slot_start.isoformat(),
+    )
+    return {
+        "appointment_id": appt.id,
+        "patient_id": appt.patient_id,
+        "scheduled_at": appt.scheduled_at.isoformat(),
+        "doctor_id": appt.doctor_id,
+        "doctor_name": appt.doctor_name,
+        "status": appt.status,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -274,10 +420,50 @@ async def create_followup_job(
         job_type=data.get("job_type", "followup"),
         scheduled_at=scheduled_at,
         status=data.get("status", "pending"),
+        correlation_id=data.get("correlation_id"),
+        completed_at=data.get("completed_at"),
     )
     session.add(job)
     await session.flush()
     logger.info("followup_job_created", job_id=job.id, patient_id=job.patient_id)
+    return job
+
+
+async def update_followup_job_by_correlation(
+    session: AsyncSession,
+    correlation_id: str,
+    *,
+    status: str | None = None,
+    executed_at: datetime | None = None,
+    completed_at: datetime | None = None,
+) -> FollowupJob | None:
+    """Update a follow-up job matched by schedule event correlation_id."""
+    if not correlation_id.strip():
+        return None
+    result = await session.execute(
+        select(FollowupJob).where(FollowupJob.correlation_id == correlation_id.strip())
+    )
+    job = result.scalar_one_or_none()
+    if job is None:
+        return None
+    if status is not None:
+        job.status = status
+    now = _now()
+    if executed_at is not None:
+        job.executed_at = executed_at
+    elif status == "in_progress" and job.executed_at is None:
+        job.executed_at = now
+    if completed_at is not None:
+        job.completed_at = completed_at
+    elif status in ("completed", "failed") and job.completed_at is None:
+        job.completed_at = now
+    await session.flush()
+    logger.info(
+        "followup_job_updated",
+        job_id=job.id,
+        correlation_id=correlation_id,
+        status=job.status,
+    )
     return job
 
 
@@ -397,11 +583,21 @@ async def get_patient_detail(
             selectinload(Patient.interactions),
             selectinload(Patient.alerts),
             selectinload(Patient.appointments),
+            selectinload(Patient.followup_jobs),
         )
     )
     patient = result.scalar_one_or_none()
     if patient is None:
         return None
+
+    followup_jobs_sorted = sorted(
+        patient.followup_jobs,
+        key=lambda j: (
+            j.scheduled_at or datetime.min.replace(tzinfo=timezone.utc),
+            j.created_at,
+        ),
+        reverse=True,
+    )
 
     latest_ds = (
         max(patient.discharge_summaries, key=lambda d: d.created_at)
@@ -414,6 +610,25 @@ async def get_patient_detail(
         if patient.questionnaires
         else None
     )
+
+    questionnaire_out: dict[str, Any] | None = None
+    if latest_q:
+        qs, consent_injected = ensure_appointment_consent_question(
+            json.loads(latest_q.questions_json)
+        )
+        if consent_injected:
+            logger.info(
+                "questionnaire.appt_consent_injected",
+                patient_id=patient.id,
+                questionnaire_id=latest_q.id,
+                source="patient_detail",
+            )
+        questionnaire_out = {
+            "id": latest_q.id,
+            "questions": qs,
+            "diagnosis_context": latest_q.diagnosis_context,
+            "generated_at": latest_q.generated_at,
+        }
 
     return {
         "id": patient.id,
@@ -447,16 +662,7 @@ async def get_patient_detail(
             }
             for m in patient.medications
         ],
-        "questionnaire": (
-            {
-                "id": latest_q.id,
-                "questions": json.loads(latest_q.questions_json),
-                "diagnosis_context": latest_q.diagnosis_context,
-                "generated_at": latest_q.generated_at,
-            }
-            if latest_q
-            else None
-        ),
+        "questionnaire": questionnaire_out,
         "interactions": [
             {
                 "id": i.id,
@@ -495,6 +701,19 @@ async def get_patient_detail(
             for ap in sorted(
                 patient.appointments, key=lambda x: x.created_at, reverse=True
             )
+        ],
+        "followup_jobs": [
+            {
+                "id": j.id,
+                "job_type": j.job_type,
+                "scheduled_at": j.scheduled_at,
+                "status": j.status,
+                "executed_at": j.executed_at,
+                "completed_at": j.completed_at,
+                "correlation_id": j.correlation_id,
+                "created_at": j.created_at,
+            }
+            for j in followup_jobs_sorted
         ],
     }
 
@@ -611,10 +830,18 @@ async def get_patient_timeline(
     return entries
 
 
-async def get_appointments(session: AsyncSession) -> list[dict[str, Any]]:
+async def get_appointments(
+    session: AsyncSession,
+    doctor_id: str | None = None,
+) -> list[dict[str, Any]]:
+    conditions = []
+    if doctor_id:
+        conditions.append(Appointment.doctor_id == doctor_id)
+
     result = await session.execute(
         select(Appointment)
         .options(selectinload(Appointment.patient))
+        .where(*conditions)
         .order_by(Appointment.created_at.desc())
     )
     appointments = result.scalars().all()
@@ -627,6 +854,7 @@ async def get_appointments(session: AsyncSession) -> list[dict[str, Any]]:
             "scheduled_at": ap.scheduled_at,
             "status": ap.status,
             "notes": ap.notes,
+            "doctor_name": ap.doctor_name,
             "created_at": ap.created_at,
         }
         for ap in appointments
@@ -658,11 +886,21 @@ async def get_patient_questionnaire(
     q = result.scalar_one_or_none()
     if q is None:
         return None
+    qs, consent_injected = ensure_appointment_consent_question(
+        json.loads(q.questions_json)
+    )
+    if consent_injected:
+        logger.info(
+            "questionnaire.appt_consent_injected",
+            patient_id=q.patient_id,
+            questionnaire_id=q.id,
+            source="get_patient_questionnaire",
+        )
     return {
         "id": q.id,
         "questionnaire_id": q.id,
         "patient_id": q.patient_id,
-        "questions": json.loads(q.questions_json),
+        "questions": qs,
         "diagnosis_context": q.diagnosis_context,
         "generated_at": q.generated_at,
     }
@@ -687,6 +925,8 @@ async def get_followup_jobs(
             "scheduled_at": j.scheduled_at,
             "status": j.status,
             "executed_at": j.executed_at,
+            "completed_at": j.completed_at,
+            "correlation_id": j.correlation_id,
             "created_at": j.created_at,
         }
         for j in jobs

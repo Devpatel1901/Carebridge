@@ -58,6 +58,10 @@ class EvaluateResponseResult(BaseModel):
 
 class InitiateCallRequest(BaseModel):
     patient_id: str
+    schedule_correlation_id: str | None = Field(
+        default=None,
+        description="schedule_event correlation_id to update FollowupJob status",
+    )
 
 
 class PatientSummary(BaseModel):
@@ -84,6 +88,25 @@ class PatientDetail(BaseModel):
     interactions: list[dict[str, Any]] = []
     alerts: list[dict[str, Any]] = []
     appointments: list[dict[str, Any]] = []
+    followup_jobs: list[dict[str, Any]] = []
+
+
+class FollowupJobStatusPatch(BaseModel):
+    status: str
+    executed_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class DoctorScheduleFollowupRequest(BaseModel):
+    """Local wall-clock in US Eastern (America/New_York); server converts to UTC for scheduling."""
+
+    eastern_date: str = Field(..., description="YYYY-MM-DD")
+    eastern_time: str = Field(..., description="HH:MM 24h")
+
+
+class DoctorScheduleFollowupResponse(BaseModel):
+    correlation_id: str
+    scheduled_at: datetime
 
 
 class AlertOut(BaseModel):

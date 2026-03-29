@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { SeverityBadge } from "@/components/severity-badge";
 import { api, AlertItem } from "@/lib/api";
+import { formatEasternDateTime } from "@/lib/datetime";
 
 const cardClass = "border border-[#e8e8e8] bg-white shadow-sm";
 
@@ -86,7 +87,7 @@ export default function AlertsPage() {
                   </div>
                   <p className="text-sm text-[#333]">{alert.message}</p>
                   <p className="text-xs text-[#888]">
-                    {alert.created_at ? new Date(alert.created_at).toLocaleString() : ""}
+                    {alert.created_at ? formatEasternDateTime(alert.created_at) : ""}
                   </p>
                 </div>
                 {!alert.acknowledged && (

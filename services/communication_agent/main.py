@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -14,10 +15,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from twilio.twiml.voice_response import VoiceResponse
 
+from services.communication_agent.appointment_handler import handle_appointment_booking_request
 from services.communication_agent.config import SERVICE_NAME, SERVICE_PORT, comm_settings
+from services.communication_agent.elevenlabs_tts import router as tts_router
+from services.communication_agent.followup_db import patch_followup_job_status
 from services.communication_agent.ngrok_compat import ngrok_free_skip_warning_params
 from services.communication_agent.twilio_client import make_voice_call
 from services.communication_agent.webhooks import (
+    appointment_voice_gather_webhook,
+    appointment_voice_start_webhook,
     voice_complete_webhook,
     voice_gather_webhook,
     voice_start_webhook,
@@ -78,6 +84,11 @@ async def lifespan(app: FastAPI):
         )
     await event_bus.connect()
     await cache.connect()
+    await event_bus.subscribe(
+        "appointment_booking_request",
+        handle_appointment_booking_request,
+        queue_name="comm_agent.appointment_booking_request",
+    )
     yield
     await cache.disconnect()
     await event_bus.disconnect()
@@ -91,6 +102,7 @@ app = FastAPI(
 )
 app.add_middleware(TwilioVoiceRequestLogMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
+app.include_router(tts_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -176,6 +188,7 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
         "patient_name": patient_name,
         "diagnosis": diagnosis,
         "questionnaire_id": questionnaire_id,
+        "schedule_correlation_id": body.schedule_correlation_id,
         "questions": [
             {
                 "id": q.get("id", str(i)),
@@ -212,6 +225,13 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
     session["call_sid"] = call_sid
     await cache.set_json(session_key, session, expire_seconds=3600)
 
+    if body.schedule_correlation_id:
+        await patch_followup_job_status(
+            body.schedule_correlation_id,
+            "in_progress",
+            executed_at=datetime.now(timezone.utc),
+        )
+
     logger.info(
         "call_initiated",
         patient_id=patient_id,
@@ -239,11 +259,9 @@ async def twiml_smoke() -> Response:
 
       curl -sS 'BASE/webhooks/voice/twiml-smoke' | head -1
     """
+    from services.communication_agent.webhooks import _speak
     vr = VoiceResponse()
-    vr.say(
-        "CareBridge webhook smoke test. If you hear this on a trial call, your tunnel works.",
-        voice="Polly.Joanna",
-    )
+    _speak(vr, "CareBridge webhook smoke test. If you hear this on a trial call, your tunnel works.")
     vr.hangup()
     return Response(
         content=str(vr),
@@ -277,6 +295,21 @@ async def handle_voice_complete(request: Request):
 @app.post("/webhooks/voice/status")
 async def handle_voice_status(request: Request):
     return await voice_status_webhook(request)
+
+
+# ---------------------------------------------------------------------------
+# Appointment booking voice routes
+# ---------------------------------------------------------------------------
+
+@app.get("/webhooks/voice/appointment/start")
+@app.post("/webhooks/voice/appointment/start")
+async def handle_appt_voice_start(request: Request):
+    return await appointment_voice_start_webhook(request)
+
+
+@app.post("/webhooks/voice/appointment/gather")
+async def handle_appt_voice_gather(request: Request):
+    return await appointment_voice_gather_webhook(request)
 
 
 # ---------------------------------------------------------------------------

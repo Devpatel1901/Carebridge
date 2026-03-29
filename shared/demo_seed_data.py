@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from shared.questionnaire_defaults import APPOINTMENT_CONSENT_QUESTION
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -29,7 +31,7 @@ DEMO_PATIENT_SEEDS: list[dict[str, Any]] = [
         "dob": "1983-06-12",
         "phone": "+19302159133",
         "email": "neelshah190@gmail.com",
-        "status": "High Risk",
+        "status": "Stable",
         "risk_level": "high",
         "discharge_summary": {
             "diagnosis": "Traumatic brain injury (concussion) with brief LOC — monitoring in ICU",
@@ -133,6 +135,7 @@ Follow-up: Cardiology outpatient.
                     "question_type": "yes_no",
                     "relevance": "medium",
                 },
+                {**APPOINTMENT_CONSENT_QUESTION},
             ],
         },
         "appointments": [
@@ -199,6 +202,7 @@ Attending: Dr. Ahmed Khan
                     "question_type": "yes_no",
                     "relevance": "medium",
                 },
+                {**APPOINTMENT_CONSENT_QUESTION},
             ],
         },
         "appointments": [
@@ -251,6 +255,7 @@ Follow-up: Surgical clinic; physical therapy as arranged.
                     "question_type": "yes_no",
                     "relevance": "high",
                 },
+                {**APPOINTMENT_CONSENT_QUESTION},
             ],
         },
         "appointments": [
@@ -303,6 +308,7 @@ Follow-up: Surgery/primary care as scheduled.
                     "question_type": "yes_no",
                     "relevance": "high",
                 },
+                {**APPOINTMENT_CONSENT_QUESTION},
             ],
         },
         "appointments": [

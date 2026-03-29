@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { formatEasternFromEpochMs } from "@/lib/datetime";
 
 const ACCEPT = ".pdf,.doc,.docx,.txt,.text,.md,.markdown";
 const ACCEPT_LABEL = "PDF, DOC, DOCX";
@@ -102,12 +103,7 @@ export function DischargeUploadModal({ open, onOpenChange, busy, onComplete }: P
 
   if (!open) return null;
 
-  const dateStr = file
-    ? new Date(file.lastModified).toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      })
-    : "";
+  const dateStr = file ? formatEasternFromEpochMs(file.lastModified) : "";
 
   return (
     <div

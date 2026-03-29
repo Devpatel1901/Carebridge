@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Callable
@@ -25,7 +26,24 @@ class EventBus:
 
     async def connect(self) -> None:
         settings = get_settings()
-        self._connection = await aio_pika.connect_robust(settings.rabbitmq_url)
+        url = settings.rabbitmq_url
+        last_exc: Exception | None = None
+        for attempt in range(12):
+            try:
+                self._connection = await aio_pika.connect_robust(url)
+                break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "event_bus_connect_retry",
+                    attempt=attempt + 1,
+                    url=url.split("@")[-1] if "@" in url else url,
+                )
+                await asyncio.sleep(1.5)
+        else:
+            assert last_exc is not None
+            raise last_exc
+
         self._channel = await self._connection.channel()
         self._exchange = await self._channel.declare_exchange(
             EXCHANGE_NAME,
