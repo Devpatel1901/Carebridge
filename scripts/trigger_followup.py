@@ -6,15 +6,17 @@ import sys
 
 import httpx
 
-SCHEDULER_URL = "http://localhost:8004"
-DB_AGENT_URL = "http://localhost:8003"
+from shared.service_urls import db_agent_url, scheduler_url
+
+SCHEDULER_URL = scheduler_url()
+DB_AGENT_URL = db_agent_url()
 
 
 async def main():
     if len(sys.argv) < 2:
         print("Usage: python scripts/trigger_followup.py <patient_id>")
         print("\nTo find patient IDs, run:")
-        print("  curl http://localhost:8003/patients")
+        print(f"  curl {DB_AGENT_URL}/patients")
         sys.exit(1)
 
     patient_id = sys.argv[1]

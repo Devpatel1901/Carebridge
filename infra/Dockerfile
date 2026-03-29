@@ -2,15 +2,20 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml .
+COPY pyproject.toml README.md ./
 RUN uv pip install --system -e "."
 
 COPY shared/ shared/
 COPY services/ services/
+COPY scripts/ scripts/
 COPY alembic.ini .
-COPY .env .env
+COPY shared/db/migrations/ shared/db/migrations/
 
 ARG SERVICE_MODULE=services.db_agent.main:app
 ARG SERVICE_PORT=8000

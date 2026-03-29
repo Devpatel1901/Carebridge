@@ -71,6 +71,57 @@ brew services start rabbitmq
 brew services start redis
 ```
 
+## Docker (full stack)
+
+Run **RabbitMQ, Redis, all four Python services, the Next.js dashboard, and a persisted SQLite volume** with one command from the **repository root**:
+
+```bash
+cp .env.example .env
+# Fill in ANTHROPIC_API_KEY, Twilio values, and TWILIO_WEBHOOK_BASE_URL (see below)
+
+docker compose up --build
+```
+
+- **Dashboard**: [http://localhost:3000](http://localhost:3000) — the browser calls API URLs on `localhost:8001`, `8003`, `8004` (ports published from the containers).
+- **SQLite**: Stored in the Compose named volume `sqlite_data` (on disk it appears as `{project}_sqlite_data`, e.g. `carebridge_sqlite_data`). Only **db_agent** mounts it; other services use the DB Agent HTTP API (do not mount the same SQLite file on multiple writers).
+- **Legacy path**: `docker compose -f infra/docker-compose.yml` loads the same stack via an `include` of the root file.
+
+### Twilio voice + ngrok with Docker
+
+Twilio must reach a **public HTTPS** URL. **`TWILIO_WEBHOOK_BASE_URL` must not** be `http://communication_agent:8002` (that hostname exists only inside Compose).
+
+1. Start the stack: `docker compose up --build`.
+2. On the **host**, expose published port **8002**: `ngrok http 8002`.
+3. Set **`TWILIO_WEBHOOK_BASE_URL`** in `.env` to your ngrok **HTTPS** origin (no path), then restart the **communication_agent** container (or `docker compose up -d` again) so it picks up the value.
+
+Verify TwiML is reachable:
+
+```bash
+uv run python scripts/check_twilio_tunnel.py
+```
+
+### Scripts against Docker
+
+With default env vars, the same commands work from the **host** (they target `localhost` and the published ports):
+
+```bash
+uv run python scripts/demo_flow.py
+uv run python scripts/trigger_followup.py <patient_id>
+uv run python scripts/seed_data.py
+```
+
+To run the demo **inside** Compose with internal DNS (optional):
+
+```bash
+docker compose --profile tooling run --rm tooling
+```
+
+Override bases if needed (see [.env.example](.env.example)): `BRAIN_AGENT_URL`, `DB_AGENT_URL`, `SCHEDULER_URL`, `COMM_AGENT_URL`, `FRONTEND_URL`.
+
+### Scaling note
+
+SQLite implies a **single db_agent** instance with the data volume. To scale out multiple DB Agent replicas, move to a network database (e.g. **Postgres**) and update `DATABASE_URL` accordingly.
+
 ## Running
 
 You need 7 terminals (or use a process manager):

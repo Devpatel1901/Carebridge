@@ -1,4 +1,4 @@
-"""End-to-end demo: ingest discharge, trigger follow-up via real Twilio SMS."""
+"""End-to-end demo: ingest discharge, trigger follow-up via real Twilio voice."""
 from __future__ import annotations
 
 import asyncio
@@ -6,10 +6,19 @@ import sys
 
 import httpx
 
-BRAIN_AGENT_URL = "http://localhost:8001"
-COMM_AGENT_URL = "http://localhost:8002"
-DB_AGENT_URL = "http://localhost:8003"
-SCHEDULER_URL = "http://localhost:8004"
+from shared.service_urls import (
+    brain_agent_url,
+    comm_agent_url,
+    db_agent_url,
+    frontend_url,
+    scheduler_url,
+)
+
+BRAIN_AGENT_URL = brain_agent_url()
+COMM_AGENT_URL = comm_agent_url()
+DB_AGENT_URL = db_agent_url()
+SCHEDULER_URL = scheduler_url()
+FRONTEND_BASE = frontend_url()
 
 
 async def wait_for_services():
@@ -119,9 +128,9 @@ async def main():
 
     print("\n" + "=" * 60)
     print("Demo flow complete!")
-    print(f"\nDashboard: http://localhost:3001")
-    print(f"Patient:   http://localhost:3001/patients/{patient_id}")
-    print(f"Alerts:    http://localhost:3001/alerts")
+    print(f"\nDashboard: {FRONTEND_BASE}")
+    print(f"Patient:   {FRONTEND_BASE}/patients/{patient_id}")
+    print(f"Alerts:    {FRONTEND_BASE}/alerts")
     print("=" * 60)
 
 
