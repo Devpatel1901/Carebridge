@@ -102,6 +102,22 @@ export interface TimelineEntry {
   details: Record<string, unknown>;
 }
 
+export interface DischargeIntakeRequest {
+  patient_name: string;
+  patient_phone: string;
+  patient_dob: string | null;
+  patient_email: string | null;
+  discharge_summary_text: string;
+}
+
+export interface DischargeIntakeResponse {
+  patient_id: string;
+  risk_level: string;
+  decision: string;
+  generated_questions: unknown[];
+  correlation_id: string;
+}
+
 export const api = {
   getPatients: () => fetchJson<PatientSummary[]>(`${DB_AGENT_URL}/patients`),
   getPatient: (id: string) => fetchJson<PatientDetail>(`${DB_AGENT_URL}/patients/${id}`),
@@ -115,4 +131,10 @@ export const api = {
     fetchJson<TimelineEntry[]>(`${DB_AGENT_URL}/patients/${patientId}/timeline`),
   triggerFollowup: (patientId: string) =>
     fetchJson<{ status: string }>(`${SCHEDULER_URL}/trigger/${patientId}`, { method: "POST" }),
+  /** Brain Agent — same pipeline as scripts/demo_flow.py step 1. Returns new patient_id. */
+  ingestDischarge: (body: DischargeIntakeRequest) =>
+    fetchJson<DischargeIntakeResponse>(`${BRAIN_AGENT_URL}/intake`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

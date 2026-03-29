@@ -3,23 +3,17 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
-/** Demo census list — mix of admitted, ICU, recovering, stable, and discharged (Figma-style palette). */
+/** Demo census — limited to 5 rows (Figma) to avoid table/page scrollbars; phones kept for discharge intake. */
 export const staticPatients = [
-  { id: "1024587", name: "Sarah Chen", age: 42, gender: "F", reason: "Head Trauma", status: "High Risk", ward: "ICU-3" },
-  { id: "7658321", name: "Omar Farooq", age: 40, gender: "M", reason: "Heart Failure", status: "Discharged", ward: "—" },
-  { id: "2156793", name: "David Lee", age: 67, gender: "M", reason: "Pneumonia", status: "Recovering", ward: "G-12" },
-  { id: "3298461", name: "Ayesha Begum", age: 87, gender: "F", reason: "Post-Op Recovery", status: "Stable", ward: "R-14" },
-  { id: "4532109", name: "Habib Chowdhury", age: 28, gender: "M", reason: "Post-Op Recovery", status: "Stable", ward: "ICU-3" },
-  { id: "5874632", name: "Nasreen Akter", age: 55, gender: "F", reason: "Post Traumatic Stress", status: "High Risk", ward: "ICU-2" },
-  { id: "9012345", name: "James Miller", age: 51, gender: "M", reason: "Chest Pain", status: "Admitted", ward: "R-08" },
-  { id: "8021566", name: "Priya Nair", age: 34, gender: "F", reason: "Diabetes Management", status: "Admitted", ward: "R-22" },
-  { id: "7730199", name: "Robert Kim", age: 72, gender: "M", reason: "COPD Exacerbation", status: "Admitted", ward: "G-05" },
-  { id: "6612408", name: "Elena Rossi", age: 29, gender: "F", reason: "Observation", status: "Admitted", ward: "ED-2" },
-  { id: "5543891", name: "Marcus Webb", age: 45, gender: "M", reason: "Appendectomy", status: "Discharged", ward: "—" },
-  { id: "4488120", name: "Fatima Noor", age: 63, gender: "F", reason: "Stroke Follow-up", status: "Discharged", ward: "—" },
+  { id: "1024587", name: "Sarah Chen", age: 42, gender: "F", phone: "+15551024587", email: "sarah.chen@demo.com", reason: "Head Trauma", status: "High Risk", ward: "ICU-3" },
+  { id: "7658321", name: "Omar Farooq", age: 40, gender: "M", phone: "+15557658321", reason: "Heart Failure", status: "Discharged", ward: "R-18" },
+  { id: "2156793", name: "David Lee", age: 67, gender: "M", phone: "+15552156793", email: "d.lee@demo.com", reason: "Pneumonia", status: "Recovering", ward: "G-12" },
+  { id: "3298461", name: "Ayesha Begum", age: 87, gender: "F", phone: "+15553298461", reason: "Post-Op Recovery", status: "Stable", ward: "R-14" },
+  { id: "4532109", name: "Habib Chowdhury", age: 28, gender: "M", phone: "+15554532109", reason: "Post-Op Recovery", status: "Stable", ward: "ICU-9" },
 ];
 
-const filters = ["All", "Admitted", "Recovery", "High Risk", "Stable", "Discharged"] as const;
+/** Figma filter chips (screenshot 1). */
+const filters = ["All", "Recovery", "High Risk", "Stable", "Discharged"] as const;
 
 export const statusColors: Record<string, { bg: string; text: string }> = {
   "High Risk": { bg: "#fce4e4", text: "#c0392b" },
@@ -32,10 +26,19 @@ export const statusColors: Record<string, { bg: string; text: string }> = {
 const inHospital = (s: string) =>
   ["Admitted", "High Risk", "Recovering", "Stable"].includes(s);
 
+/** Figma dashboard home (screenshot): fixed headline numbers. */
+export function getFigmaHomeStats() {
+  return [
+    { label: "Total Patients", value: 8 },
+    { label: "Emergency", value: 1 },
+    { label: "Recovery", value: 1 },
+    { label: "High-Risk", value: 2 },
+  ] as const;
+}
+
 export function getDashboardStats() {
   const rows = staticPatients;
   const admittedLike = rows.filter((p) => inHospital(p.status)).length;
-  const discharged = rows.filter((p) => p.status === "Discharged").length;
   const highRisk = rows.filter((p) => p.status === "High Risk").length;
   const recovery = rows.filter((p) => p.status === "Recovering").length;
   return [
@@ -44,17 +47,6 @@ export function getDashboardStats() {
     { label: "In Recovery", value: recovery },
     { label: "High-Risk", value: highRisk },
   ] as const;
-}
-
-export function getCensusSummary() {
-  const rows = staticPatients;
-  return {
-    total: rows.length,
-    admitted: rows.filter((p) => p.status === "Admitted").length,
-    inHouse: rows.filter((p) => inHospital(p.status)).length,
-    discharged: rows.filter((p) => p.status === "Discharged").length,
-    highRisk: rows.filter((p) => p.status === "High Risk").length,
-  };
 }
 
 export function PatientManagementHeader() {
@@ -80,8 +72,8 @@ export function PatientManagementHeader() {
   );
 }
 
-export function PatientStatCards() {
-  const stats = getDashboardStats();
+export function PatientStatCards({ variant = "default" }: { variant?: "default" | "figma" }) {
+  const stats = variant === "figma" ? getFigmaHomeStats() : getDashboardStats();
   return (
     <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
       {stats.map((stat) => (
@@ -166,7 +158,7 @@ export function PatientStaticTableCard({ highlightPatientId }: PatientStaticTabl
           <table className="min-w-[720px] w-full border-collapse">
             <thead>
               <tr className="border-t border-[#eee]">
-                {["Patient ID", "Patient Name", "Reason", "Status", "Ward", "Action"].map((h) => (
+                {["Patient ID", "Patient Name", "Reason", "Status", "Ward / Bed", "Action"].map((h) => (
                   <th
                     key={h}
                     className="whitespace-nowrap border-b border-[#eee] px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-[#888] sm:px-[22px] sm:text-[12.5px] sm:normal-case sm:tracking-normal"
@@ -186,37 +178,36 @@ export function PatientStaticTableCard({ highlightPatientId }: PatientStaticTabl
                       isCurrent ? "bg-[#e8f5e9]/80" : ""
                     }`}
                   >
-                    <td className="whitespace-nowrap px-4 py-3.5 text-[13px] text-[#555] sm:px-[22px] sm:py-4 sm:text-[13.5px]">
+                    <td className="whitespace-nowrap px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
                       {p.id}
                     </td>
-                    <td className="min-w-[140px] px-4 py-3.5 sm:px-[22px] sm:py-4">
+                    <td className="min-w-[140px] px-4 py-4 sm:px-[22px]">
                       <div className="text-sm font-semibold text-[#1a1a1a]">{p.name}</div>
-                      <div className="mt-0.5 text-[11px] text-[#999] sm:text-[12.5px]">
+                      <div className="mt-0.5 text-[12.5px] text-[#999]">
                         {p.age}y · {p.gender}
                       </div>
                     </td>
-                    <td className="max-w-[180px] px-4 py-3.5 text-[13px] text-[#555] sm:px-[22px] sm:py-4 sm:text-[13.5px]">
+                    <td className="max-w-[220px] px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
                       <span className="line-clamp-2">{p.reason}</span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3.5 sm:px-[22px] sm:py-4">
+                    <td className="whitespace-nowrap px-4 py-4 sm:px-[22px]">
                       <span
-                        className="inline-block max-w-[9rem] truncate rounded-full px-2.5 py-1 text-[11px] font-medium sm:max-w-none sm:px-3.5 sm:text-[12.5px]"
+                        className="inline-block rounded-full px-3.5 py-1 text-[12.5px] font-medium"
                         style={{
                           background: statusColors[p.status]?.bg ?? "#eee",
                           color: statusColors[p.status]?.text ?? "#555",
                         }}
-                        title={p.status}
                       >
                         {p.status}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3.5 text-[13px] text-[#555] sm:px-[22px] sm:py-4 sm:text-[13.5px]">
+                    <td className="whitespace-nowrap px-4 py-4 text-[13.5px] text-[#555] sm:px-[22px]">
                       {p.ward}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3.5 sm:px-[22px] sm:py-4">
+                    <td className="whitespace-nowrap px-4 py-4 sm:px-[22px]">
                       <Link
                         href={`/patients/${p.id}`}
-                        className="inline-flex rounded-lg bg-[#2d6a2e] px-3 py-1.5 text-center text-xs font-medium text-white transition-colors duration-200 hover:bg-[#245a25] sm:px-[18px] sm:py-[7px] sm:text-[13px]"
+                        className="inline-flex rounded-lg border border-[#2d6a2e]/50 bg-[#e8f5e9] px-[18px] py-[7px] text-[13px] font-semibold text-[#2d6a2e] transition-colors duration-200 hover:bg-[#d4ecd6]"
                       >
                         View Details
                       </Link>
