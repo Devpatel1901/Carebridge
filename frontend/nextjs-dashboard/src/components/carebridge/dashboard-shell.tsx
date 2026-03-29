@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { useDoctor } from "@/lib/doctor-context";
 import {
   NavIconAppointments,
   NavIconMessages,
@@ -33,10 +35,38 @@ const topNav: {
   { id: "staff", label: "Staff Members", href: "#", Icon: NavIconStaff, match: () => false },
 ];
 
-const bottomNav = ["Settings", "Help / Support", "Logout"] as const;
+const AVATAR_COLORS: Record<string, string> = {
+  "doc-001": "from-[#7c3aed] to-[#a78bfa]",
+  "doc-002": "from-[#0369a1] to-[#38bdf8]",
+  "doc-003": "from-[#15803d] to-[#4ade80]",
+};
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { doctor, logout } = useDoctor();
+
+  // Redirect to login if no doctor is selected (skip for the login page itself)
+  useEffect(() => {
+    if (!doctor && pathname !== "/login") {
+      router.replace("/login");
+    }
+  }, [doctor, pathname, router]);
+
+  const handleLogout = () => {
+    logout();
+    router.replace("/login");
+  };
+
+  // Don't render the shell on the login page
+  if (pathname === "/login") {
+    return <>{children}</>;
+  }
+
+  // While redirecting (no doctor yet), render nothing
+  if (!doctor) return null;
+
+  const avatarGradient = AVATAR_COLORS[doctor.id] || "from-[#8B7355] to-[#A0926B]";
 
   return (
     <div className="flex min-h-screen bg-[#f8f9fa] text-[#1a1a1a] antialiased">
@@ -74,7 +104,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="px-2.5 pb-5 pt-0">
-          {bottomNav.map((item) => (
+          {(["Settings", "Help / Support"] as const).map((item) => (
             <button
               key={item}
               type="button"
@@ -94,17 +124,24 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                     <line x1="12" y1="17" x2="12.01" y2="17" />
                   </>
                 )}
-                {item === "Logout" && (
-                  <>
-                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-                    <polyline points="16 17 21 12 16 7" />
-                    <line x1="21" y1="12" x2="9" y2="12" />
-                  </>
-                )}
               </svg>
               <span>{item}</span>
             </button>
           ))}
+
+          {/* Logout */}
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="mb-px flex w-full cursor-pointer items-center gap-3 rounded-[10px] px-4 py-2.5 text-left text-[13.5px] text-[#555] transition-colors hover:bg-[#fee2e2] hover:text-red-700"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            <span>Logout</span>
+          </button>
         </div>
       </aside>
 
@@ -145,12 +182,19 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                 <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
               </svg>
             </button>
+
+            {/* Doctor avatar + name */}
             <div className="ml-1 flex items-center gap-2">
               <div
-                className="h-9 w-9 shrink-0 rounded-full border-2 border-[#e0d9c8] bg-gradient-to-br from-[#8B7355] to-[#A0926B]"
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${avatarGradient} text-xs font-bold text-white border-2 border-white shadow-sm`}
                 aria-hidden
-              />
-              <span className="text-sm font-medium text-[#333]">Dr. Sarah</span>
+              >
+                {doctor.initials}
+              </div>
+              <div className="flex flex-col leading-tight">
+                <span className="text-sm font-medium text-[#333]">{doctor.name}</span>
+                <span className="text-[11px] text-[#999]">{doctor.specialty}</span>
+              </div>
             </div>
           </div>
         </header>

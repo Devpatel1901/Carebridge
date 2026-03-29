@@ -14,6 +14,7 @@ from shared.db.models import (
     Appointment,
     AuditLog,
     DischargeSummary,
+    DoctorSchedule,
     EventStore,
     FollowupJob,
     Medication,
@@ -266,11 +267,136 @@ async def create_appointment(
         scheduled_at=scheduled_at,
         status=data.get("status", "scheduled"),
         notes=data.get("notes"),
+        doctor_id=data.get("doctor_id"),
+        doctor_name=data.get("doctor_name"),
     )
     session.add(appt)
     await session.flush()
     logger.info("appointment_created", appt_id=appt.id, patient_id=appt.patient_id)
     return appt
+
+
+async def update_appointment(
+    session: AsyncSession,
+    appointment_id: str,
+    updates: dict[str, Any],
+) -> Appointment | None:
+    """Partially update an appointment's status, notes, or scheduling fields."""
+    result = await session.execute(
+        select(Appointment).where(Appointment.id == appointment_id)
+    )
+    appt = result.scalar_one_or_none()
+    if appt is None:
+        return None
+
+    allowed = {"status", "notes", "scheduled_at", "doctor_id", "doctor_name", "appointment_type"}
+    for field, value in updates.items():
+        if field not in allowed:
+            continue
+        if field == "scheduled_at" and isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        setattr(appt, field, value)
+
+    await session.flush()
+    logger.info("appointment_updated", appt_id=appt.id, updates=list(updates.keys()))
+    return appt
+
+
+async def get_available_slots(
+    session: AsyncSession,
+    urgency: str = "medium",
+    limit: int = 3,
+    doctor_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return the next N available doctor slots filtered by urgency window and optionally doctor."""
+    from datetime import timedelta
+    now = _now()
+    windows = {"high": timedelta(hours=48), "medium": timedelta(days=7), "low": timedelta(days=14)}
+    cutoff = now + windows.get(urgency, timedelta(days=7))
+
+    conditions = [
+        DoctorSchedule.status == "available",
+        DoctorSchedule.slot_start >= now,
+        DoctorSchedule.slot_start <= cutoff,
+    ]
+    if doctor_id:
+        conditions.append(DoctorSchedule.doctor_id == doctor_id)
+
+    result = await session.execute(
+        select(DoctorSchedule)
+        .where(*conditions)
+        .order_by(DoctorSchedule.slot_start)
+        .limit(limit)
+    )
+    slots = result.scalars().all()
+    return [
+        {
+            "id": s.id,
+            "doctor_id": s.doctor_id,
+            "doctor_name": s.doctor_name,
+            "slot_start": s.slot_start.isoformat(),
+            "slot_end": s.slot_end.isoformat(),
+            "status": s.status,
+        }
+        for s in slots
+    ]
+
+
+async def confirm_appointment_slot(
+    session: AsyncSession,
+    slot_id: str,
+    appointment_id: str,
+    patient_id: str,
+) -> dict[str, Any] | None:
+    """
+    Optimistic-lock confirm: marks the slot booked only if it is still available.
+    Returns the updated appointment dict, or None if the slot was already taken.
+    """
+    from sqlalchemy import update
+
+    result = await session.execute(
+        select(DoctorSchedule).where(
+            DoctorSchedule.id == slot_id,
+            DoctorSchedule.status == "available",
+        )
+    )
+    slot = result.scalar_one_or_none()
+    if slot is None:
+        logger.warning("confirm_slot.already_taken", slot_id=slot_id)
+        return None
+
+    slot.status = "booked"
+    slot.patient_id = patient_id
+    await session.flush()
+
+    appt_result = await session.execute(
+        select(Appointment).where(Appointment.id == appointment_id)
+    )
+    appt = appt_result.scalar_one_or_none()
+    if appt is None:
+        logger.error("confirm_slot.appointment_not_found", appointment_id=appointment_id)
+        return None
+
+    appt.scheduled_at = slot.slot_start
+    appt.doctor_id = slot.doctor_id
+    appt.doctor_name = slot.doctor_name
+    appt.status = "confirmed"
+    await session.flush()
+
+    logger.info(
+        "appointment_slot_confirmed",
+        appointment_id=appointment_id,
+        slot_id=slot_id,
+        scheduled_at=slot.slot_start.isoformat(),
+    )
+    return {
+        "appointment_id": appt.id,
+        "patient_id": appt.patient_id,
+        "scheduled_at": appt.scheduled_at.isoformat(),
+        "doctor_id": appt.doctor_id,
+        "doctor_name": appt.doctor_name,
+        "status": appt.status,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -691,10 +817,18 @@ async def get_patient_timeline(
     return entries
 
 
-async def get_appointments(session: AsyncSession) -> list[dict[str, Any]]:
+async def get_appointments(
+    session: AsyncSession,
+    doctor_id: str | None = None,
+) -> list[dict[str, Any]]:
+    conditions = []
+    if doctor_id:
+        conditions.append(Appointment.doctor_id == doctor_id)
+
     result = await session.execute(
         select(Appointment)
         .options(selectinload(Appointment.patient))
+        .where(*conditions)
         .order_by(Appointment.created_at.desc())
     )
     appointments = result.scalars().all()
@@ -707,6 +841,7 @@ async def get_appointments(session: AsyncSession) -> list[dict[str, Any]]:
             "scheduled_at": ap.scheduled_at,
             "status": ap.status,
             "notes": ap.notes,
+            "doctor_name": ap.doctor_name,
             "created_at": ap.created_at,
         }
         for ap in appointments

@@ -35,6 +35,7 @@ async def make_voice_call(
             "from_": settings.twilio_phone_number,
             "url": twiml_url,
             "method": "GET",
+            # "record": True,
         }
         if status_callback_url:
             kwargs["status_callback"] = status_callback_url

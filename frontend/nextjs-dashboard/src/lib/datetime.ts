@@ -52,6 +52,50 @@ export function formatEasternFromEpochMs(ms: number): string {
 /**
  * Default date (YYYY-MM-DD) and time (HH:mm) inputs for US Eastern, ~10 minutes from now.
  */
+/** YYYY-MM-DD for "today" in US Eastern (calendar navigation / grouping). */
+export function easternTodayDateKey(): string {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = fmt.formatToParts(new Date());
+  const get = (t: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/** Map an API instant to YYYY-MM-DD in US Eastern (for grouping appointments by calendar day). */
+export function apiInstantToEasternDateKey(iso: string | null): string | null {
+  if (iso == null || iso === "") return null;
+  const d = parseUtcInstantFromApi(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = fmt.formatToParts(d);
+  const get = (t: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/** Short time in US Eastern (e.g. sidebar list). */
+export function formatEasternTimeOnly(iso: string | null | undefined): string {
+  if (iso == null || iso === "") return "—";
+  const d = parseUtcInstantFromApi(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString("en-US", {
+    timeZone: DISPLAY_TIME_ZONE,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
 export function defaultEasternDateTimeParts(): { date: string; time: string } {
   const plus = new Date(Date.now() + 10 * 60 * 1000);
   const fmt = new Intl.DateTimeFormat("en-CA", {

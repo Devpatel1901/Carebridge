@@ -137,6 +137,8 @@ class Appointment(Base):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(50), default="scheduled")
     notes: Mapped[str | None] = mapped_column(Text)
+    doctor_id: Mapped[str | None] = mapped_column(String(36))
+    doctor_name: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     patient: Mapped[Patient] = relationship(back_populates="appointments")
@@ -167,6 +169,28 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(50))
     changes_json: Mapped[str | None] = mapped_column(Text)
     correlation_id: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class Doctor(Base):
+    __tablename__ = "doctors"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    specialty: Mapped[str] = mapped_column(String(255), default="General Practice")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class DoctorSchedule(Base):
+    __tablename__ = "doctor_schedules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_gen_id)
+    doctor_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    doctor_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slot_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    slot_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="available")
+    patient_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 

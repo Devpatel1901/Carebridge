@@ -78,7 +78,6 @@ _DECISION_MAP = {
     "followup_needed": DecisionType.FOLLOWUP_NEEDED,
     "alert": DecisionType.ALERT,
     "escalation": DecisionType.ESCALATION,
-    "appointment_required": DecisionType.APPOINTMENT_REQUIRED,
 }
 
 
@@ -279,6 +278,17 @@ def questionnaire_generation_node(state: BrainState) -> dict[str, Any]:
             }
         ]
 
+    # Always append the fixed appointment consent question as the last question
+    questions.append({
+        "id": "q_appt_consent",
+        "text": (
+            "Based on how you're feeling, would you like to schedule an "
+            "in-person appointment with your doctor?"
+        ),
+        "question_type": "appointment_consent",
+        "relevance": "Patient consent for appointment scheduling",
+    })
+
     return {"generated_questions": questions}
 
 
@@ -291,6 +301,9 @@ def response_analysis_node(state: BrainState) -> dict[str, Any]:
     patient_response = state.get("patient_response", {})
     responses = patient_response.get("responses", [])
     diagnosis_context = patient_response.get("diagnosis", "Unknown")
+
+    # Exclude the consent question — it is not a clinical signal
+    responses = [r for r in responses if r.get("question_id") != "q_appt_consent"]
 
     logger.info(
         "response_analysis_node.start",
@@ -377,7 +390,8 @@ def decision_node(state: BrainState) -> dict[str, Any]:
         "- alert: Create a clinical alert; use when symptoms or findings warrant care-team attention "
         "(often together with followup_needed-level concern).\n"
         "- escalation: Urgent escalation to a provider.\n"
-        "- appointment_required: Schedule an in-person appointment.\n\n"
+        "- appointment_required: Rare — in-person visit when clinically necessary beyond the usual "
+        "voice consent flow (patients normally book via the last questionnaire question in the call).\n\n"
         "Use stable only when the patient is clearly doing well. New or worsening symptoms (e.g. chest pain, "
         "bruising, focal neuro signs) must NOT be stable—choose followup_needed, alert, or escalation as appropriate.\n\n"
         "When response analysis is present: if overall concern is low and the patient reports feeling well "
@@ -429,6 +443,7 @@ def decision_node(state: BrainState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Node 7 – Action Generation
 # ---------------------------------------------------------------------------
+
 
 _SEVERITY_MAP = {
     "low": Severity.LOW,

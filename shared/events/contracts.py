@@ -151,3 +151,18 @@ class PatientRecordUpdated(BaseEvent):
     event_type: str = "patient_record_updated"
     patient_id: str
     updated_fields: list[str] = []
+
+
+class AppointmentBookingRequest(BaseEvent):
+    event_type: str = "appointment_booking_request"
+    patient_id: str
+    urgency: str = "medium"
+    reason: str = ""
+
+
+class AppointmentConfirmed(BaseEvent):
+    event_type: str = "appointment_confirmed"
+    patient_id: str
+    appointment_id: str
+    scheduled_at: datetime
+    doctor_name: str
