@@ -30,8 +30,7 @@ export default function PatientDetailPage() {
   const [apiPatient, setApiPatient] = useState<PatientDetail | null>(null);
   const [apiAttempted, setApiAttempted] = useState(false);
   const [intakeBusy, setIntakeBusy] = useState(false);
-  const [triggerBusy, setTriggerBusy] = useState(false);
-  const [workflowTargetId, setWorkflowTargetId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("overview");
 
   const demoRow = useMemo(() => findStaticPatient(id), [id]);
 
@@ -58,39 +57,25 @@ export default function PatientDetailPage() {
     setApiAttempted(false);
     setApiPatient(null);
     fetchPatient();
-    const t = setInterval(fetchPatient, 8000);
+    const t = setInterval(fetchPatient, 4000);
     return () => clearInterval(t);
   }, [fetchPatient]);
 
   useEffect(() => {
-    if (apiPatient) {
-      setWorkflowTargetId(apiPatient.id);
-      return;
-    }
-    const envId = process.env.NEXT_PUBLIC_TRIGGER_PATIENT_ID?.trim();
-    if (envId) {
-      setWorkflowTargetId(envId);
-      return;
-    }
-    let cancelled = false;
-    api
-      .getPatients()
-      .then((list) => {
-        if (!cancelled) setWorkflowTargetId(list[0]?.id ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setWorkflowTargetId(null);
-      });
-    return () => {
-      cancelled = true;
+    const onVis = () => {
+      if (document.visibilityState === "visible") void fetchPatient();
     };
-  }, [apiPatient]);
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [fetchPatient]);
 
   const voiceInteractions = useMemo(() => {
     if (!patient) return [];
-    return patient.interactions.filter(
-      (i) => (i.channel || "").toLowerCase() === "voice" || (i.interaction_type || "").toLowerCase().includes("voice")
-    );
+    return patient.interactions.filter((i) => {
+      const ch = (i.channel || "").toLowerCase();
+      const ty = (i.interaction_type || "").toLowerCase();
+      return ch === "voice" || ty.includes("voice");
+    });
   }, [patient]);
 
   const handleDischargeFile = async (text: string) => {
@@ -103,26 +88,13 @@ export default function PatientDetailPage() {
         patient_dob: patient.dob,
         patient_email: patient.email,
         discharge_summary_text: text,
+        existing_patient_id: patient.id,
       });
       router.replace(`/patients/${res.patient_id}`);
     } catch {
       /* ignore */
     } finally {
       setIntakeBusy(false);
-    }
-  };
-
-  const handleTrigger = async () => {
-    const target = workflowTargetId;
-    if (!target) return;
-    setTriggerBusy(true);
-    try {
-      await api.triggerFollowup(target);
-      await fetchPatient();
-    } catch {
-      /* ignore */
-    } finally {
-      setTriggerBusy(false);
     }
   };
 
@@ -166,7 +138,14 @@ export default function PatientDetailPage() {
           <span className="font-medium text-[#1a1a1a]">{patient.name}</span>
         </div>
 
-        <Tabs defaultValue="overview" className="space-y-5">
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => {
+            setActiveTab(v);
+            if (v === "ai-calls") void fetchPatient();
+          }}
+          className="space-y-5"
+        >
           <TabsList className={tabListClass}>
             <TabsTrigger value="overview" className={tabTriggerClass}>
               Overview
@@ -398,8 +377,8 @@ export default function PatientDetailPage() {
             {voiceInteractions.length === 0 ? (
               <Card className={cardClass}>
                 <CardContent className="p-8 text-center text-[#888]">
-                  No AI voice calls yet. After intake, use &quot;Trigger AI follow-up call&quot; — completed Twilio
-                  voice sessions appear here.
+                  No AI voice calls yet. After a Twilio follow-up session completes, the conversation summary appears
+                  here automatically (refreshed every few seconds).
                 </CardContent>
               </Card>
             ) : (
@@ -416,12 +395,15 @@ export default function PatientDetailPage() {
                   <CardContent>
                     {inter.responses?.length ? (
                       <div className="space-y-2">
-                        {inter.responses.map((r, idx) => (
-                          <div key={idx} className="rounded-lg border border-[#eee] bg-[#fafafa] p-3 text-sm">
-                            <p className="text-[#888]">{r.question_text}</p>
-                            <p className="mt-1 font-medium">{r.answer}</p>
-                          </div>
-                        ))}
+                        {inter.responses.map((r, idx) => {
+                          const q = r.question_text ?? r.question ?? "";
+                          return (
+                            <div key={idx} className="rounded-lg border border-[#eee] bg-[#fafafa] p-3 text-sm">
+                              <p className="text-[#888]">{q || "Question"}</p>
+                              <p className="mt-1 font-medium">{r.answer}</p>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="text-sm text-[#888]">Call completed — no structured responses stored.</p>
@@ -459,16 +441,7 @@ export default function PatientDetailPage() {
         </Tabs>
       </div>
 
-      <PatientDetailRightRail
-        patient={patient}
-        demoRow={demoRow}
-        isLive={isLive}
-        intakeBusy={intakeBusy}
-        triggerBusy={triggerBusy}
-        canTrigger={Boolean(workflowTargetId && (isLive ? workflowTargetId === apiPatient?.id : true))}
-        onDischargeFile={handleDischargeFile}
-        onTriggerFollowup={handleTrigger}
-      />
+      <PatientDetailRightRail patient={patient} demoRow={demoRow} intakeBusy={intakeBusy} onDischargeFile={handleDischargeFile} />
     </div>
   );
 }

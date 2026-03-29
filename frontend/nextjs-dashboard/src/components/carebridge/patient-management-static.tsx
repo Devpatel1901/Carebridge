@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 export const staticPatients = [
   { id: "1024587", name: "Sarah Chen", age: 42, gender: "F", phone: "+15551024587", email: "sarah.chen@demo.com", reason: "Head Trauma", status: "High Risk", ward: "ICU-3" },
   { id: "7658321", name: "Omar Farooq", age: 40, gender: "M", phone: "+15557658321", reason: "Heart Failure", status: "Discharged", ward: "R-18" },
-  { id: "2156793", name: "David Lee", age: 67, gender: "M", phone: "+15552156793", email: "d.lee@demo.com", reason: "Pneumonia", status: "Recovering", ward: "G-12" },
+  { id: "2156793", name: "David Lee", age: 67, gender: "M", phone: "+15552156793", email: "d.lee@demo.com", reason: "Pneumonia", status: "Recovering", ward: "G-12 / Bed A" },
   { id: "3298461", name: "Ayesha Begum", age: 87, gender: "F", phone: "+15553298461", reason: "Post-Op Recovery", status: "Stable", ward: "R-14" },
   { id: "4532109", name: "Habib Chowdhury", age: 28, gender: "M", phone: "+15554532109", reason: "Post-Op Recovery", status: "Stable", ward: "ICU-9" },
 ];

@@ -84,7 +84,17 @@ docker compose up --build
 
 - **Dashboard**: [http://localhost:3000](http://localhost:3000) — the browser calls API URLs on `localhost:8001`, `8003`, `8004` (ports published from the containers).
 - **SQLite**: Stored in the Compose named volume `sqlite_data` (on disk it appears as `{project}_sqlite_data`, e.g. `carebridge_sqlite_data`). Only **db_agent** mounts it; other services use the DB Agent HTTP API (do not mount the same SQLite file on multiple writers).
+- **Demo census (5 patients)**: On first startup, the **DB Agent** seeds SQLite with five patients whose **IDs match the Patient Management table** (`1024587`, `7658321`, etc.). Each row includes demographics, a discharge summary, medications, a questionnaire, and an appointment so **View Details** loads real API data that aligns with the dashboard labels. The seed runs once per volume; to reset, remove the volume (`docker volume rm carebridge_sqlite_data`) and `docker compose up --build` again. To disable seeding, set `SKIP_DEMO_SEED=1` for the `db_agent` service (see `.env.example`).
+- **Discharge upload**: The dashboard sends `existing_patient_id` to Brain `/intake` so a new discharge file **updates the same patient** instead of creating a random UUID—keeping names and IDs consistent with the seeded row.
 - **Legacy path**: `docker compose -f infra/docker-compose.yml` loads the same stack via an `include` of the root file.
+
+#### Steps: verify demo data after `docker compose up --build`
+
+1. Wait until `db_agent` is healthy (logs show `demo_seed_complete` on first run, or `demo_seed_skipped` if the volume already had data).
+2. Open [http://localhost:3000](http://localhost:3000), click **View Details** on e.g. David Lee (`2156793`).
+3. Confirm the detail page shows **David Lee**, **Pneumonia** / recovering context from the API (not only static placeholders). Optional: call `curl -s http://localhost:8003/patients/2156793 | jq .name,.discharge_summary.diagnosis`.
+4. **Re-seed from scratch**: `docker compose down`, `docker volume rm carebridge_sqlite_data`, then `docker compose up --build`.
+5. **Manual seed** (local SQLite file without Docker): from repo root, `DATABASE_URL=sqlite+aiosqlite:///./carebridge.db uv run python scripts/seed_sqlite_demo.py`.
 
 ### Twilio voice + ngrok with Docker
 

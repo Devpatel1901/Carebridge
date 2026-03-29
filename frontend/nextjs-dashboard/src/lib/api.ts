@@ -49,7 +49,8 @@ export interface PatientDetail {
     id: string;
     interaction_type: string;
     channel: string;
-    responses: { question_id: string; question_text: string; answer: string }[] | null;
+    /** Backend may store `question` (from event pipeline) or `question_text`. */
+    responses: { question_id?: string; question_text?: string; question?: string; answer: string }[] | null;
     created_at: string;
   }[];
   alerts: {
@@ -108,6 +109,8 @@ export interface DischargeIntakeRequest {
   patient_dob: string | null;
   patient_email: string | null;
   discharge_summary_text: string;
+  /** When set, intake updates this patient row instead of creating a new id (matches seeded/demo IDs). */
+  existing_patient_id?: string | null;
 }
 
 export interface DischargeIntakeResponse {

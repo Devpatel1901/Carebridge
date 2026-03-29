@@ -217,7 +217,8 @@ async def health():
 @app.post("/intake", response_model=DischargeIntakeResponse)
 async def intake(req: DischargeIntakeRequest):
     """Process a new discharge summary through the full intake pipeline."""
-    patient_id = str(uuid.uuid4())
+    existing = (req.existing_patient_id or "").strip()
+    patient_id = existing if existing else str(uuid.uuid4())
     correlation_id = str(uuid.uuid4())
 
     logger.info(
