@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { PatientDetail } from "@/lib/api";
 import { ageFromIsoDob } from "@/lib/patient-utils";
 import { DischargeUploadModal } from "@/components/carebridge/discharge-upload-modal";
+import { statusColors } from "@/components/carebridge/patient-management-static";
 
 type Props = {
   patient: PatientDetail;
@@ -42,6 +43,7 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
 
   const statusLabel = patient.status ?? "—";
   const statusUpper = statusLabel.toUpperCase();
+  const statusStyle = statusColors[statusLabel] ?? { bg: "#eee", text: "#555" };
   const diagnosis = patient.discharge_summary?.diagnosis ?? "—";
   const wardBed = useMemo(() => wardFromAppointments(patient), [patient]);
   const age = ageFromIsoDob(patient.dob);
@@ -88,7 +90,10 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <dt className="text-[#666]">Status</dt>
                 <dd>
-                  <span className="inline-block rounded-md bg-[#dbe8fd] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-[#1a4fd6]">
+                  <span
+                    className="inline-block rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
+                    style={{ background: statusStyle.bg, color: statusStyle.text }}
+                  >
                     {statusUpper}
                   </span>
                 </dd>
