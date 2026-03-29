@@ -1,4 +1,4 @@
-"""End-to-end demo: ingest discharge, trigger follow-up via real Twilio SMS."""
+"""End-to-end demo: ingest discharge, trigger follow-up via real Twilio voice."""
 from __future__ import annotations
 
 import asyncio
@@ -6,15 +6,26 @@ import sys
 
 import httpx
 
-BRAIN_AGENT_URL = "http://localhost:8001"
-DB_AGENT_URL = "http://localhost:8003"
-SCHEDULER_URL = "http://localhost:8004"
+from shared.service_urls import (
+    brain_agent_url,
+    comm_agent_url,
+    db_agent_url,
+    frontend_url,
+    scheduler_url,
+)
+
+BRAIN_AGENT_URL = brain_agent_url()
+COMM_AGENT_URL = comm_agent_url()
+DB_AGENT_URL = db_agent_url()
+SCHEDULER_URL = scheduler_url()
+FRONTEND_BASE = frontend_url()
 
 
 async def wait_for_services():
     """Ensure all services are up."""
     services = {
         "Brain Agent": f"{BRAIN_AGENT_URL}/health",
+        "Communication Agent (Twilio voice)": f"{COMM_AGENT_URL}/health",
         "DB Agent": f"{DB_AGENT_URL}/health",
         "Scheduler": f"{SCHEDULER_URL}/health",
     }
@@ -102,18 +113,24 @@ async def main():
         print("\n[Step 5] Manually triggering AI voice follow-up call...")
         resp = await client.post(f"{SCHEDULER_URL}/trigger/{patient_id}")
         if resp.status_code == 200:
-            print(f"  [OK] Follow-up triggered: {resp.json()}")
+            body = resp.json()
+            print(f"  [OK] Follow-up triggered: {body}")
+            call = body.get("call") or {}
+            if call.get("voice_session_id"):
+                print(f"       voice_session_id: {call['voice_session_id']}")
+            if call.get("call_sid"):
+                print(f"       Twilio call_sid: {call['call_sid']}")
             print("  Twilio is calling the patient's phone number now.")
-            print("  Claude will ask the disease-specific questions via voice.")
-            print("  The patient's spoken answers will be interpreted by Claude and stored in the DB.")
+            print("  Ensure ngrok points to :8002 and TWILIO_WEBHOOK_BASE_URL matches your ngrok HTTPS URL.")
+            print("  Claude interprets spoken answers; check Communication Agent logs if the call errors.")
         else:
             print(f"  [ERROR] Trigger failed: {resp.status_code} {resp.text}")
 
     print("\n" + "=" * 60)
     print("Demo flow complete!")
-    print(f"\nDashboard: http://localhost:3001")
-    print(f"Patient:   http://localhost:3001/patients/{patient_id}")
-    print(f"Alerts:    http://localhost:3001/alerts")
+    print(f"\nDashboard: {FRONTEND_BASE}")
+    print(f"Patient:   {FRONTEND_BASE}/patients/{patient_id}")
+    print(f"Alerts:    {FRONTEND_BASE}/alerts")
     print("=" * 60)
 
 

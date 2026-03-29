@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { SeverityBadge } from "@/components/severity-badge";
 import { api, AlertItem } from "@/lib/api";
 
+const cardClass = "border border-[#e8e8e8] bg-white shadow-sm";
+
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -15,8 +17,11 @@ export default function AlertsPage() {
   const fetchAlerts = async () => {
     try {
       setAlerts(await api.getAlerts());
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -29,60 +34,58 @@ export default function AlertsPage() {
     try {
       await api.acknowledgeAlert(id);
       fetchAlerts();
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   };
 
   const unacked = alerts.filter((a) => !a.acknowledged);
   const acked = alerts.filter((a) => a.acknowledged);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Alerts</h1>
+    <div className="space-y-6 px-7 py-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h1 className="text-[22px] font-bold text-[#1a1a1a]">Alerts</h1>
         <div className="flex gap-2">
-          <Badge variant="outline" className="bg-red-900/30 text-red-300 border-red-700">
+          <Badge variant="outline" className="border-red-200 bg-red-50 text-red-800">
             {unacked.length} active
           </Badge>
-          <Badge variant="outline" className="bg-zinc-800 text-zinc-400 border-zinc-600">
+          <Badge variant="outline" className="border-[#ddd] bg-[#fafafa] text-[#555]">
             {acked.length} acknowledged
           </Badge>
         </div>
       </div>
 
       {loading ? (
-        <div className="p-8 text-center text-zinc-500">Loading...</div>
+        <div className="p-8 text-center text-[#888]">Loading...</div>
       ) : alerts.length === 0 ? (
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardContent className="p-8 text-center text-zinc-500">
-            No alerts. System is quiet.
-          </CardContent>
+        <Card className={cardClass}>
+          <CardContent className="p-8 text-center text-[#888]">No alerts. System is quiet.</CardContent>
         </Card>
       ) : (
         <div className="space-y-3">
           {[...unacked, ...acked].map((alert) => (
             <Card
               key={alert.id}
-              className={`border ${
-                !alert.acknowledged
-                  ? "bg-zinc-900 border-red-900/50"
-                  : "bg-zinc-900/50 border-zinc-800 opacity-70"
+              className={`${cardClass} ${
+                !alert.acknowledged ? "border-red-200/80" : "opacity-90"
               }`}
             >
-              <CardContent className="p-4 flex items-start justify-between">
-                <div className="space-y-2 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
+              <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <SeverityBadge severity={alert.severity} />
-                    <Badge variant="outline" className="bg-zinc-800 text-zinc-300 border-zinc-600">
+                    <Badge variant="outline" className="border-[#ddd] bg-[#fafafa] text-[#333]">
                       {alert.alert_type}
                     </Badge>
                     {alert.patient_name && (
-                      <Link href={`/patients/${alert.patient_id}`} className="text-blue-400 hover:underline text-sm">
+                      <Link href={`/patients/${alert.patient_id}`} className="text-sm text-[#2563eb] hover:underline">
                         {alert.patient_name}
                       </Link>
                     )}
                   </div>
-                  <p className="text-sm">{alert.message}</p>
-                  <p className="text-zinc-500 text-xs">
+                  <p className="text-sm text-[#333]">{alert.message}</p>
+                  <p className="text-xs text-[#888]">
                     {alert.created_at ? new Date(alert.created_at).toLocaleString() : ""}
                   </p>
                 </div>
@@ -91,13 +94,13 @@ export default function AlertsPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleAcknowledge(alert.id)}
-                    className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700 ml-4"
+                    className="shrink-0 rounded-[10px] border-[#e0e0e0] bg-[#fafafa] hover:bg-[#f0f0f0] sm:ml-4"
                   >
                     Acknowledge
                   </Button>
                 )}
                 {alert.acknowledged && (
-                  <Badge variant="outline" className="bg-green-900/30 text-green-400 border-green-700 ml-4">
+                  <Badge variant="outline" className="shrink-0 border-green-200 bg-green-50 text-green-800 sm:ml-4">
                     Acknowledged
                   </Badge>
                 )}

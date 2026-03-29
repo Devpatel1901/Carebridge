@@ -13,13 +13,15 @@ Patient responses → Brain Agent (risk analysis) → Alerts → Dashboard
 
 ### Services
 
-| Service | Port | Description |
-|---------|------|-------------|
-| Brain Agent | 8001 | LangGraph pipeline with Claude: parses discharge summaries, evaluates risk, generates disease-specific questions, analyzes responses, makes clinical decisions |
-| Communication Agent | 8002 | Real Twilio SMS/Voice integration: sends follow-up questions, receives patient replies via webhooks |
-| DB Agent | 8003 | Sole database writer: persists patients, discharge data, medications, questionnaires, interactions, alerts, appointments. REST API for dashboard |
-| Scheduler | 8004 | APScheduler: triggers follow-ups at scheduled times, subscribes to schedule events |
-| Frontend | 3000 | Next.js dashboard: patients, alerts, appointments, timeline |
+
+| Service             | Port | Description                                                                                                                                                    |
+| ------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Brain Agent         | 8001 | LangGraph pipeline with Claude: parses discharge summaries, evaluates risk, generates disease-specific questions, analyzes responses, makes clinical decisions |
+| Communication Agent | 8002 | Real Twilio SMS/Voice integration: sends follow-up questions, receives patient replies via webhooks                                                            |
+| DB Agent            | 8003 | Sole database writer: persists patients, discharge data, medications, questionnaires, interactions, alerts, appointments. REST API for dashboard               |
+| Scheduler           | 8004 | APScheduler: triggers follow-ups at scheduled times, subscribes to schedule events                                                                             |
+| Frontend            | 3000 | Next.js dashboard: patients, alerts, appointments, timeline                                                                                                    |
+
 
 ### Event Flow
 
@@ -69,6 +71,67 @@ brew services start rabbitmq
 brew services start redis
 ```
 
+## Docker (full stack)
+
+Run **RabbitMQ, Redis, all four Python services, the Next.js dashboard, and a persisted SQLite volume** with one command from the **repository root**:
+
+```bash
+cp .env.example .env
+# Fill in ANTHROPIC_API_KEY, Twilio values, and TWILIO_WEBHOOK_BASE_URL (see below)
+
+docker compose up --build
+```
+
+- **Dashboard**: [http://localhost:3000](http://localhost:3000) — the browser calls API URLs on `localhost:8001`, `8003`, `8004` (ports published from the containers).
+- **SQLite**: Stored in the Compose named volume `sqlite_data` (on disk it appears as `{project}_sqlite_data`, e.g. `carebridge_sqlite_data`). Only **db_agent** mounts it; other services use the DB Agent HTTP API (do not mount the same SQLite file on multiple writers).
+- **Demo census (5 patients)**: On first startup, the **DB Agent** seeds SQLite with five patients (`1024587`, `7658321`, …). The **home page ward table** loads **`GET /patients`** only (no duplicate static JSON), so Patient IDs and Reason/Ward columns match SQLite. Each seed row includes demographics, discharge summary, medications, questionnaire, and appointments. The seed runs once per volume; to reset, remove the volume (`docker volume rm carebridge_sqlite_data`) and `docker compose up --build` again. To disable seeding, set `SKIP_DEMO_SEED=1` for the `db_agent` service (see `.env.example`).
+- **Discharge upload**: The dashboard sends `existing_patient_id` to Brain `/intake` so a new discharge file **updates the same patient** instead of creating a random UUID.
+- **Legacy path**: `docker compose -f infra/docker-compose.yml` loads the same stack via an `include` of the root file.
+
+#### Steps: verify demo data after `docker compose up --build`
+
+1. Wait until `db_agent` is healthy (logs show `demo_seed_complete` on first run, or `demo_seed_skipped` if the volume already had data).
+2. Open [http://localhost:3000](http://localhost:3000), click **View Details** on e.g. David Lee (`2156793`).
+3. Confirm the detail page shows **David Lee**, **Pneumonia** / recovering context from the API (not only static placeholders). Optional: call `curl -s http://localhost:8003/patients/2156793 | jq .name,.discharge_summary.diagnosis`.
+4. **Re-seed from scratch**: `docker compose down`, `docker volume rm carebridge_sqlite_data`, then `docker compose up --build`.
+5. **Manual seed** (local SQLite file without Docker): from repo root, `DATABASE_URL=sqlite+aiosqlite:///./carebridge.db uv run python scripts/seed_sqlite_demo.py`.
+
+### Twilio voice + ngrok with Docker
+
+Twilio must reach a **public HTTPS** URL. **`TWILIO_WEBHOOK_BASE_URL` must not** be `http://communication_agent:8002` (that hostname exists only inside Compose).
+
+1. Start the stack: `docker compose up --build`.
+2. On the **host**, expose published port **8002**: `ngrok http 8002`.
+3. Set **`TWILIO_WEBHOOK_BASE_URL`** in `.env` to your ngrok **HTTPS** origin (no path), then restart the **communication_agent** container (or `docker compose up -d` again) so it picks up the value.
+
+Verify TwiML is reachable:
+
+```bash
+uv run python scripts/check_twilio_tunnel.py
+```
+
+### Scripts against Docker
+
+With default env vars, the same commands work from the **host** (they target `localhost` and the published ports):
+
+```bash
+uv run python scripts/demo_flow.py
+uv run python scripts/trigger_followup.py <patient_id>
+uv run python scripts/seed_data.py
+```
+
+To run the demo **inside** Compose with internal DNS (optional):
+
+```bash
+docker compose --profile tooling run --rm tooling
+```
+
+Override bases if needed (see [.env.example](.env.example)): `BRAIN_AGENT_URL`, `DB_AGENT_URL`, `SCHEDULER_URL`, `COMM_AGENT_URL`, `FRONTEND_URL`.
+
+### Scaling note
+
+SQLite implies a **single db_agent** instance with the data volume. To scale out multiple DB Agent replicas, move to a network database (e.g. **Postgres**) and update `DATABASE_URL` accordingly.
+
 ## Running
 
 You need 7 terminals (or use a process manager):
@@ -100,10 +163,13 @@ uv run python scripts/seed_data.py
 ## Demo Walkthrough
 
 ### Step 1: Seed a discharge summary
+
 ```bash
 uv run python scripts/seed_data.py
 ```
+
 This sends a realistic cardiac patient discharge to the Brain Agent. Claude will:
+
 - Parse the discharge summary
 - Extract medications, diagnosis, procedures
 - Evaluate risk level (likely HIGH for STEMI)
@@ -111,22 +177,28 @@ This sends a realistic cardiac patient discharge to the Brain Agent. Claude will
 - Schedule follow-ups
 
 ### Step 2: Check the dashboard
-Open http://localhost:3000 — you should see the patient with risk level and all data populated.
+
+Open [http://localhost:3000](http://localhost:3000) — you should see the patient with risk level and all data populated.
 
 ### Step 3: Trigger a follow-up
+
 ```bash
 uv run python scripts/trigger_followup.py <patient_id>
 ```
+
 Or use the "Trigger Follow-up SMS" button on the patient detail page. This sends real SMS to the patient's phone with the first disease-specific question.
 
 ### Step 4: Reply via SMS
+
 Reply to the SMS from your phone. Each reply advances to the next question. After all questions are answered:
+
 - Responses are published to RabbitMQ
 - Brain Agent analyzes responses with Claude
 - If risk detected → Alert created
 - All data reflected in the dashboard
 
 ### Full automated demo
+
 ```bash
 uv run python scripts/demo_flow.py
 ```
@@ -134,12 +206,14 @@ uv run python scripts/demo_flow.py
 ## API Reference
 
 ### Brain Agent (`:8001`)
+
 - `POST /intake` — Process discharge summary
 - `POST /evaluate-response` — Evaluate patient responses
 - `GET /patients/{id}/questions` — Get generated questionnaire
 - `GET /health`
 
 ### Communication Agent (`:8002`)
+
 - `POST /initiate-call` — Start SMS/voice follow-up
 - `POST /webhooks/sms` — Twilio SMS webhook
 - `POST /webhooks/voice/start` — Twilio voice start
@@ -148,6 +222,7 @@ uv run python scripts/demo_flow.py
 - `GET /health`
 
 ### DB Agent (`:8003`)
+
 - `GET /patients` — List patients
 - `GET /patients/{id}` — Patient detail
 - `GET /alerts` — List alerts
@@ -159,6 +234,7 @@ uv run python scripts/demo_flow.py
 - `GET /health`
 
 ### Scheduler (`:8004`)
+
 - `GET /jobs` — List scheduled jobs
 - `POST /trigger/{patient_id}` — Manual follow-up trigger
 - `GET /health`
@@ -176,3 +252,4 @@ uv run python scripts/demo_flow.py
 - **Next.js 14** + TypeScript + Tailwind CSS + shadcn/ui
 - **structlog** for structured JSON logging with correlation IDs
 - **uv** for Python dependency management
+

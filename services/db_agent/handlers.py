@@ -208,6 +208,7 @@ async def handle_patient_response_event(envelope: dict[str, Any]) -> None:
             qa_list = [
                 {
                     "question_id": r.get("question_id"),
+                    "question_text": r.get("question_text"),
                     "question": r.get("question_text"),
                     "answer": r.get("answer"),
                     "normalized": r.get("normalized"),

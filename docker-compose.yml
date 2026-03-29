@@ -1,0 +1,207 @@
+# CareBridge — full stack (from repository root: `docker compose up --build`)
+# Twilio voice: run ngrok on the host (`ngrok http 8002`) and set TWILIO_WEBHOOK_BASE_URL in `.env`.
+
+name: carebridge
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db_agent:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.db_agent.main:app
+        SERVICE_PORT: "8003"
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: sqlite+aiosqlite:///./data/carebridge.db
+      DB_AGENT_URL: http://db_agent:8003
+      BRAIN_AGENT_URL: http://brain_agent:8001
+      COMM_AGENT_URL: http://communication_agent:8002
+      SCHEDULER_URL: http://scheduler:8004
+    volumes:
+      - sqlite_data:/app/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8003/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  brain_agent:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.brain_agent.main:app
+        SERVICE_PORT: "8001"
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      DB_AGENT_URL: http://db_agent:8003
+      BRAIN_AGENT_URL: http://brain_agent:8001
+      COMM_AGENT_URL: http://communication_agent:8002
+      SCHEDULER_URL: http://scheduler:8004
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db_agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  communication_agent:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.communication_agent.main:app
+        SERVICE_PORT: "8002"
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      DB_AGENT_URL: http://db_agent:8003
+      BRAIN_AGENT_URL: http://brain_agent:8001
+      COMM_AGENT_URL: http://communication_agent:8002
+      SCHEDULER_URL: http://scheduler:8004
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db_agent:
+        condition: service_healthy
+      brain_agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8002/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.scheduler.main:app
+        SERVICE_PORT: "8004"
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq/
+      REDIS_URL: redis://redis:6379
+      COMM_AGENT_URL: http://communication_agent:8002
+      DB_AGENT_URL: http://db_agent:8003
+      BRAIN_AGENT_URL: http://brain_agent:8001
+      SCHEDULER_URL: http://scheduler:8004
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      db_agent:
+        condition: service_healthy
+      communication_agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8004/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  frontend:
+    build:
+      context: ./frontend/nextjs-dashboard
+      dockerfile: ../../infra/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    environment:
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+      NEXT_PUBLIC_DB_AGENT_URL: http://localhost:8003
+      NEXT_PUBLIC_BRAIN_AGENT_URL: http://localhost:8001
+      NEXT_PUBLIC_SCHEDULER_URL: http://localhost:8004
+    depends_on:
+      db_agent:
+        condition: service_healthy
+
+  # Run full demo against compose DNS: `docker compose --profile tooling run --rm tooling`
+  tooling:
+    profiles: ["tooling"]
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+      args:
+        SERVICE_MODULE: services.db_agent.main:app
+        SERVICE_PORT: "8003"
+    env_file:
+      - .env
+    working_dir: /app
+    environment:
+      BRAIN_AGENT_URL: http://brain_agent:8001
+      COMM_AGENT_URL: http://communication_agent:8002
+      DB_AGENT_URL: http://db_agent:8003
+      SCHEDULER_URL: http://scheduler:8004
+      FRONTEND_URL: http://localhost:3000
+    entrypoint: ["uv", "run", "python"]
+    command: ["scripts/demo_flow.py"]
+    depends_on:
+      brain_agent:
+        condition: service_healthy
+      communication_agent:
+        condition: service_healthy
+      db_agent:
+        condition: service_healthy
+      scheduler:
+        condition: service_healthy
+
+volumes:
+  sqlite_data:

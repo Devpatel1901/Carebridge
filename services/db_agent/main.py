@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.cache import cache
 from shared.db.engine import create_all_tables, get_db, init_db
+from services.db_agent.seed_demo import seed_demo_patients_if_empty
 from shared.events.bus import event_bus
 from shared.logging import CorrelationIdMiddleware, get_logger, setup_logging
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     await cache.connect()
     await init_db()
     await create_all_tables()
+    await seed_demo_patients_if_empty()
 
     await event_bus.subscribe(
         "patient_state_upsert",

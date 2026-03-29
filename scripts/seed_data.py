@@ -6,7 +6,9 @@ import sys
 
 import httpx
 
-BRAIN_AGENT_URL = "http://localhost:8001"
+from shared.service_urls import brain_agent_url
+
+BRAIN_AGENT_URL = brain_agent_url()
 
 DISCHARGE_SUMMARY = """
 DISCHARGE SUMMARY

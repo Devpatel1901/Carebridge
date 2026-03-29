@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+import time
+from urllib.parse import urlencode
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+from twilio.twiml.voice_response import VoiceResponse
 
 from services.communication_agent.config import SERVICE_NAME, SERVICE_PORT, comm_settings
+from services.communication_agent.ngrok_compat import ngrok_free_skip_warning_params
 from services.communication_agent.twilio_client import make_voice_call
 from services.communication_agent.webhooks import (
+    voice_complete_webhook,
     voice_gather_webhook,
     voice_start_webhook,
     voice_status_webhook,
@@ -23,9 +32,50 @@ setup_logging()
 logger = get_logger(SERVICE_NAME)
 
 
+class TwilioVoiceRequestLogMiddleware(BaseHTTPMiddleware):
+    """Log Twilio webhook requests — if these never appear, Twilio is not reaching this app."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/webhooks/voice"):
+            return await call_next(request)
+        t0 = time.perf_counter()
+        logger.info(
+            "twilio_http_in",
+            method=request.method,
+            path=path,
+            query=str(request.query_params),
+        )
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception("twilio_http_error", path=path)
+            raise
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        logger.info(
+            "twilio_http_out",
+            path=path,
+            status_code=response.status_code,
+            elapsed_ms=elapsed_ms,
+        )
+        return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("starting", service=SERVICE_NAME, port=SERVICE_PORT)
+    s = comm_settings.settings
+    pub = s.twilio_webhook_base_url.strip().rstrip("/")
+    logger.info(
+        "starting",
+        service=SERVICE_NAME,
+        port=SERVICE_PORT,
+        twilio_webhook_host=pub[:60] + ("…" if len(pub) > 60 else ""),
+    )
+    if "localhost" in pub or "127.0.0.1" in pub:
+        logger.warning(
+            "TWILIO_WEBHOOK_BASE_URL points to localhost — Twilio cannot reach it. "
+            "Use your public HTTPS tunnel URL (e.g. ngrok) in .env and restart."
+        )
     await event_bus.connect()
     await cache.connect()
     yield
@@ -39,6 +89,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.add_middleware(TwilioVoiceRequestLogMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -114,9 +165,12 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
                    "Ensure the discharge intake has been processed.",
         )
 
-    # Build Redis session — includes diagnosis for ai_interpreter context
-    session_key = f"voice_session:{patient_id}"
+    # One Redis session per outbound call (avoids overwrite/races when the same
+    # patient is called again before the previous call finishes).
+    voice_session_id = str(uuid.uuid4())
+    session_key = f"voice_session:{voice_session_id}"
     session = {
+        "voice_session_id": voice_session_id,
         "patient_id": patient_id,
         "patient_phone": patient_phone,
         "patient_name": patient_name,
@@ -138,9 +192,15 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
     await cache.set_json(session_key, session, expire_seconds=3600)
 
     # Build webhook URLs using the public ngrok base URL
-    base = settings.twilio_webhook_base_url.rstrip("/")
-    start_url = f"{base}/webhooks/voice/start?patient_id={patient_id}"
-    status_url = f"{base}/webhooks/voice/status"
+    base = settings.twilio_webhook_base_url.strip().rstrip("/")
+    ngrok_q = ngrok_free_skip_warning_params(base)
+    start_q = urlencode({"voice_session_id": voice_session_id, **ngrok_q})
+    start_url = f"{base}/webhooks/voice/start?{start_q}"
+    status_url = (
+        f"{base}/webhooks/voice/status?{urlencode(ngrok_q)}"
+        if ngrok_q
+        else f"{base}/webhooks/voice/status"
+    )
 
     call_sid = await make_voice_call(
         to=patient_phone,
@@ -163,6 +223,7 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
         "status": "initiated",
         "channel": "voice",
         "patient_id": patient_id,
+        "voice_session_id": voice_session_id,
         "call_sid": call_sid,
     }
 
@@ -170,6 +231,25 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Twilio webhook routes (voice only)
 # ---------------------------------------------------------------------------
+
+@app.get("/webhooks/voice/twiml-smoke")
+async def twiml_smoke() -> Response:
+    """
+    Minimal TwiML (no Redis). Use to verify your tunnel returns XML the way Twilio sees it:
+
+      curl -sS 'BASE/webhooks/voice/twiml-smoke' | head -1
+    """
+    vr = VoiceResponse()
+    vr.say(
+        "CareBridge webhook smoke test. If you hear this on a trial call, your tunnel works.",
+        voice="Polly.Joanna",
+    )
+    vr.hangup()
+    return Response(
+        content=str(vr),
+        media_type="text/xml; charset=utf-8",
+    )
+
 
 @app.get("/webhooks/voice/start")
 async def handle_voice_start_get(request: Request):
@@ -185,6 +265,13 @@ async def handle_voice_start_post(request: Request):
 @app.post("/webhooks/voice/gather")
 async def handle_voice_gather(request: Request):
     return await voice_gather_webhook(request)
+
+
+@app.get("/webhooks/voice/complete")
+@app.post("/webhooks/voice/complete")
+async def handle_voice_complete(request: Request):
+    """Gather fallback redirect — must match TwiML redirects from webhooks."""
+    return await voice_complete_webhook(request)
 
 
 @app.post("/webhooks/voice/status")

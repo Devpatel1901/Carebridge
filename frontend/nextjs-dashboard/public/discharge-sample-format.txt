@@ -1,0 +1,12 @@
+CareBridge — Sample discharge summary format
+============================================
+
+Patient name:
+Date of discharge:
+Primary diagnosis:
+Procedures performed:
+Discharge medications (name, dose, frequency):
+Follow-up instructions:
+Warning signs to report:
+
+(Paste your clinical discharge text here for intake processing.)
