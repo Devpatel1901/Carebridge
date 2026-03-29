@@ -77,7 +77,6 @@ _DECISION_MAP = {
     "followup_needed": DecisionType.FOLLOWUP_NEEDED,
     "alert": DecisionType.ALERT,
     "escalation": DecisionType.ESCALATION,
-    "appointment_required": DecisionType.APPOINTMENT_REQUIRED,
 }
 
 
@@ -278,6 +277,17 @@ def questionnaire_generation_node(state: BrainState) -> dict[str, Any]:
             }
         ]
 
+    # Always append the fixed appointment consent question as the last question
+    questions.append({
+        "id": "q_appt_consent",
+        "text": (
+            "Based on how you're feeling, would you like to schedule an "
+            "in-person appointment with your doctor?"
+        ),
+        "question_type": "appointment_consent",
+        "relevance": "Patient consent for appointment scheduling",
+    })
+
     return {"generated_questions": questions}
 
 
@@ -290,6 +300,9 @@ def response_analysis_node(state: BrainState) -> dict[str, Any]:
     patient_response = state.get("patient_response", {})
     responses = patient_response.get("responses", [])
     diagnosis_context = patient_response.get("diagnosis", "Unknown")
+
+    # Exclude the consent question — it is not a clinical signal
+    responses = [r for r in responses if r.get("question_id") != "q_appt_consent"]
 
     logger.info(
         "response_analysis_node.start",
@@ -373,11 +386,12 @@ def decision_node(state: BrainState) -> dict[str, Any]:
         "- stable: Patient is doing well, continue normal follow-up.\n"
         "- followup_needed: Schedule an additional follow-up sooner.\n"
         "- alert: Create a clinical alert for the care team.\n"
-        "- escalation: Urgent escalation to a provider.\n"
-        "- appointment_required: Schedule an in-person appointment.\n\n"
+        "- escalation: Urgent escalation to a provider.\n\n"
+        "Note: appointment scheduling is handled separately based on patient consent. "
+        "Do NOT use appointment_required.\n\n"
         "Respond ONLY with valid JSON:\n"
         "{\n"
-        '  "decision_type": "stable|followup_needed|alert|escalation|appointment_required",\n'
+        '  "decision_type": "stable|followup_needed|alert|escalation",\n'
         '  "reasoning": "...",\n'
         '  "urgency": "low|medium|high|critical"\n'
         "}"
@@ -422,6 +436,7 @@ def decision_node(state: BrainState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Node 7 – Action Generation
 # ---------------------------------------------------------------------------
+
 
 _SEVERITY_MAP = {
     "low": Severity.LOW,
@@ -519,17 +534,6 @@ def action_generation_node(state: BrainState) -> dict[str, Any]:
             "alert_type": AlertType.GENERAL.value,
             "severity": sev.value,
             "message": alert_msg,
-        })
-
-    # Appointment — emit booking request so Communication Agent can negotiate
-    # a real slot with the patient via voice call
-    if decision_type == "appointment_required":
-        actions.append({
-            "type": "appointment_booking_request",
-            "patient_id": patient_id,
-            "correlation_id": correlation_id,
-            "urgency": urgency,
-            "reason": reasoning,
         })
 
     # Schedule next follow-up; tag response-chain events so demo mode uses real delay

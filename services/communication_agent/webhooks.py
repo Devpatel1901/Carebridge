@@ -365,6 +365,30 @@ async def voice_gather_webhook(request: Request) -> Response:
         session["current_index"] = q_index + 1
         session.pop(f"retry_{q_index}", None)
 
+        # Inline appointment booking — intercept after the consent question is answered
+        if current_q.get("id") == "q_appt_consent":
+            consent_given = _inline_parse_consent(interpreted.interpreted_answer)
+            logger.info(
+                "voice_gather.consent_check",
+                patient_id=session.get("patient_id"),
+                raw_answer=interpreted.interpreted_answer,
+                consent_given=consent_given,
+            )
+            if consent_given:
+                await cache.set_json(session_key, session, expire_seconds=3600)
+                await _transition_to_inline_booking(
+                    vr, session, session_key, params, call_sid
+                )
+            else:
+                vr.say(
+                    "No problem. Your care team has been notified. Take care, goodbye!",
+                    voice="Polly.Joanna",
+                )
+                vr.hangup()
+                await _publish_responses(session, call_sid=call_sid)
+                await cache.delete(session_key)
+            return _twiml(vr)
+
         next_index = q_index + 1
 
         if next_index < len(questions):
@@ -463,6 +487,165 @@ async def voice_complete_webhook(request: Request) -> Response:
         )
         vr.hangup()
         return _twiml(vr)
+
+
+def _inline_parse_consent(answer: str) -> bool:
+    """Return True if the patient's spoken consent answer is affirmative.
+
+    Handles raw speech ("yes", "yeah") and the normalized paraphrase the
+    AI interpreter produces ("Patient clearly requests to schedule...").
+    Negative patterns are checked first so an explicit decline always wins.
+    """
+    if not answer:
+        return False
+    text = answer.lower().strip()
+
+    negative_tokens = (
+        "no ", "nope", "no,", "no.", "not ", "don't", "do not",
+        "declines", "decline", "doesn't want", "does not want",
+        "not interested", "no thank", "not at this",
+    )
+    if any(token in text for token in negative_tokens):
+        return False
+
+    raw_affirmatives = (
+        "yes", "yeah", "yep", "yup", "sure", "please", "definitely",
+        "absolutely", "of course", "i would", "i'd like", "i want",
+        "would like", "sounds good", "that would", "go ahead",
+    )
+    if any(token in text for token in raw_affirmatives):
+        return True
+
+    paraphrase_affirmatives = (
+        "requests to schedule", "wants to schedule", "would like to schedule",
+        "clearly requests", "requests an appointment", "wants an appointment",
+        "would like an appointment", "asking to schedule", "expressed desire",
+        "wishes to schedule", "has requested", "indicated they want",
+        "patient requests", "patient wants",
+    )
+    return any(token in text for token in paraphrase_affirmatives)
+
+
+async def _transition_to_inline_booking(
+    vr: VoiceResponse,
+    session: dict[str, Any],
+    voice_session_key: str,
+    params: Any,
+    call_sid: str,
+) -> None:
+    """Seamlessly move from follow-up call into slot selection within the same call.
+
+    1. Publishes clinical responses to the Brain Agent.
+    2. Fetches available doctor slots.
+    3. Creates a pending appointment record.
+    4. Stores a new appt_session in Redis for the appointment/gather webhook.
+    5. Appends slot-selection TwiML to vr (no second call placed).
+    """
+    patient_id = session.get("patient_id", "")
+    patient_name = session.get("patient_name", "there")
+    settings = get_settings()
+
+    # Publish clinical responses to Brain Agent first (alerts/escalation can run in parallel)
+    try:
+        await _publish_responses(session, call_sid=call_sid)
+    except Exception:
+        logger.exception("inline_booking.publish_failed", patient_id=patient_id)
+
+    # Clean up the original voice session — it has served its purpose
+    try:
+        await cache.delete(voice_session_key)
+    except Exception:
+        pass
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Fetch available doctor slots
+            slots_resp = await client.get(
+                f"{settings.db_agent_url}/doctors/availability",
+                params={"urgency": "medium", "limit": 3},
+            )
+            slots = slots_resp.json() if slots_resp.status_code == 200 else []
+
+            if not slots:
+                vr.say(
+                    "I'd like to schedule an appointment for you, but unfortunately "
+                    "there are no available slots right now. "
+                    "Your care team will call you to arrange a time. Take care, goodbye!",
+                    voice="Polly.Joanna",
+                )
+                vr.hangup()
+                logger.warning("inline_booking.no_slots", patient_id=patient_id)
+                return
+
+            # Create a pending appointment record
+            appt_resp = await client.post(
+                f"{settings.db_agent_url}/appointments",
+                json={
+                    "patient_id": patient_id,
+                    "appointment_type": "followup",
+                    "status": "pending_confirmation",
+                    "notes": "Patient requested appointment during follow-up call.",
+                },
+            )
+            appointment_id = (
+                appt_resp.json().get("id", "")
+                if appt_resp.status_code in (200, 201)
+                else ""
+            )
+    except Exception:
+        logger.exception("inline_booking.db_error", patient_id=patient_id)
+        vr.say(
+            "I'd like to schedule an appointment, but we're having a technical issue. "
+            "Your care team will call you to arrange a time. Goodbye!",
+            voice="Polly.Joanna",
+        )
+        vr.hangup()
+        return
+
+    # Store a new appt_session keyed by a fresh UUID
+    appt_session_id = str(uuid.uuid4())
+    appt_session_key = f"appt_session:{appt_session_id}"
+    appt_session = {
+        "voice_session_id": appt_session_id,
+        "patient_id": patient_id,
+        "patient_name": patient_name,
+        "appointment_id": appointment_id,
+        "slots": slots,
+        "urgency": "medium",
+        "retry_count": 0,
+    }
+    await cache.set_json(appt_session_key, appt_session, expire_seconds=3600)
+
+    # Build slot-selection TwiML inline — gather action → existing appointment/gather webhook
+    base = settings.twilio_webhook_base_url.strip().rstrip("/")
+    ngrok_q = ngrok_free_skip_warning_params(base)
+    q = {**ngrok_q, "voice_session_id": appt_session_id}
+    gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
+    repeat_url = f"{base}/webhooks/voice/appointment/start?{urlencode(q)}"
+
+    slot_text = " ".join(_format_slot_for_speech(s, i) for i, s in enumerate(slots))
+    prompt = (
+        "Great! Let me check available appointment slots for you. "
+        f"I have {len(slots)} available time{'s' if len(slots) != 1 else ''} with your doctor. "
+        f"{slot_text} "
+        "Which option works best for you? You can say the option number, the day, "
+        "or tell me a preferred time."
+    )
+
+    gather = _build_gather(gather_url)
+    gather.say(prompt, voice="Polly.Joanna")
+    vr.append(gather)
+
+    vr.say("I didn't hear a response. Let me repeat the options.", voice="Polly.Joanna")
+    vr.redirect(repeat_url, method="GET")
+
+    logger.info(
+        "inline_booking.transitioned",
+        patient_id=patient_id,
+        appointment_id=appointment_id,
+        slots_offered=len(slots),
+        appt_session_id=appt_session_id,
+    )
 
 
 async def _finish_call(
