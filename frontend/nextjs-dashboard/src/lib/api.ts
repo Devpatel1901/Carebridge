@@ -112,6 +112,19 @@ export interface AppointmentItem {
   created_at: string | null;
 }
 
+export interface FollowupJobItem {
+  id: string;
+  patient_id: string;
+  patient_name: string | null;
+  job_type: string;
+  scheduled_at: string | null;
+  status: string;
+  executed_at: string | null;
+  completed_at: string | null;
+  correlation_id: string | null;
+  created_at: string | null;
+}
+
 export interface TimelineEntry {
   id: string;
   event_type: string;
@@ -151,6 +164,10 @@ export const api = {
   getAppointments: (doctorId?: string) =>
     fetchJson<AppointmentItem[]>(
       `${DB_AGENT_URL}/appointments${doctorId ? `?doctor_id=${encodeURIComponent(doctorId)}` : ""}`
+    ),
+  getFollowupJobs: (status?: string) =>
+    fetchJson<FollowupJobItem[]>(
+      `${DB_AGENT_URL}/followup-jobs${status ? `?status=${encodeURIComponent(status)}` : ""}`
     ),
   getTimeline: (patientId: string) =>
     fetchJson<TimelineEntry[]>(`${DB_AGENT_URL}/patients/${patientId}/timeline`),

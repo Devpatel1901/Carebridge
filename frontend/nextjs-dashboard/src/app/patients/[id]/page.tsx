@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import {
+  Activity,
+  ArrowDownRight,
+  ArrowLeft,
+  ArrowUpRight,
+  ClipboardList,
+  Stethoscope,
+  Syringe,
+  Thermometer,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -22,6 +31,55 @@ const cardClass = "rounded-xl border border-[#e8e8e8] bg-white shadow-sm";
 
 const layoutRow =
   "flex w-full min-h-[calc(100vh-52px)] flex-1 flex-col md:flex-row md:items-stretch";
+
+type ParsedAlert = {
+  question: string;
+  answer: string;
+  assessment: string;
+  flags: string[];
+  rawSummary: string;
+};
+
+function parseAlertMessage(message: string): ParsedAlert {
+  const raw = (message || "").trim();
+  if (!raw) {
+    return {
+      question: "No question captured",
+      answer: "No answer captured",
+      assessment: "No assessment available",
+      flags: [],
+      rawSummary: "No additional details.",
+    };
+  }
+
+  const flagsMatch = raw.match(/\bFlags:\s*(.+)$/i);
+  const flags = flagsMatch?.[1]
+    ? flagsMatch[1]
+        .split(/[;,]/)
+        .map((f) => f.trim())
+        .filter(Boolean)
+    : [];
+  const withoutFlags = raw.replace(/\bFlags:\s*.+$/i, "").trim();
+
+  const assessmentMatch = withoutFlags.match(/\bAssessment:\s*(.+)$/i);
+  const assessment = assessmentMatch?.[1]?.trim() || "No assessment available";
+  const beforeAssessment = withoutFlags.replace(/\bAssessment:\s*.+$/i, "").trim();
+
+  const answerMatch = beforeAssessment.match(/\bPatient reports\b[:\s-]*(.+)$/i);
+  const answer = answerMatch?.[1]?.trim() || "No patient answer captured";
+  const questionPart = answerMatch
+    ? beforeAssessment.slice(0, answerMatch.index).trim()
+    : beforeAssessment.trim();
+  const question = questionPart || "No question captured";
+
+  return {
+    question,
+    answer,
+    assessment,
+    flags,
+    rawSummary: raw,
+  };
+}
 
 export default function PatientDetailPage() {
   const params = useParams();
@@ -167,7 +225,10 @@ export default function PatientDetailPage() {
           <TabsContent value="overview" className="space-y-4">
             <Card className={cardClass}>
               <CardHeader>
-                <CardTitle className="text-lg text-[#1a1a1a]">Admission summary</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-lg text-[#1a1a1a]">
+                  <ClipboardList className="h-4 w-4 text-[#2d6a2e]" />
+                  <span>Admission summary</span>
+                </CardTitle>
               </CardHeader>
               <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
                 <div>
@@ -191,7 +252,10 @@ export default function PatientDetailPage() {
 
             <Card className={cardClass}>
               <CardHeader>
-                <CardTitle className="text-lg text-[#1a1a1a]">Presenting symptoms</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-lg text-[#1a1a1a]">
+                  <Activity className="h-4 w-4 text-[#2d6a2e]" />
+                  <span>Presenting symptoms</span>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <ul className="list-inside list-disc space-y-1 text-sm text-[#333]">
@@ -207,7 +271,10 @@ export default function PatientDetailPage() {
             <div className="grid gap-4 lg:grid-cols-2">
               <Card className={cardClass}>
                 <CardHeader>
-                  <CardTitle className="text-base text-[#1a1a1a]">Diagnosis</CardTitle>
+                  <CardTitle className="flex items-center gap-2 text-base text-[#1a1a1a]">
+                    <Stethoscope className="h-4 w-4 text-[#2d6a2e]" />
+                    <span>Diagnosis</span>
+                  </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm text-[#333]">
                   <p>
@@ -219,7 +286,10 @@ export default function PatientDetailPage() {
               </Card>
               <Card className={cardClass}>
                 <CardHeader>
-                  <CardTitle className="text-base text-[#1a1a1a]">Treatment summary</CardTitle>
+                  <CardTitle className="flex items-center gap-2 text-base text-[#1a1a1a]">
+                    <Syringe className="h-4 w-4 text-[#2d6a2e]" />
+                    <span>Treatment summary</span>
+                  </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ul className="list-inside list-disc space-y-1 text-sm text-[#333]">
@@ -234,7 +304,10 @@ export default function PatientDetailPage() {
 
             <Card className={cardClass}>
               <CardHeader>
-                <CardTitle className="text-lg text-[#1a1a1a]">Latest vitals & labs (demo)</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-lg text-[#1a1a1a]">
+                  <Thermometer className="h-4 w-4 text-[#2d6a2e]" />
+                  <span>Latest vitals & labs (demo)</span>
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -245,9 +318,19 @@ export default function PatientDetailPage() {
                     { label: "O₂ Sat", value: "96", ok: false },
                     { label: "SpO₂", value: "96%", ok: false },
                   ].map((v) => (
-                    <div key={v.label} className="rounded-lg border border-[#eee] bg-[#fafafa] p-3 text-center">
+                    <div
+                      key={v.label}
+                      className="rounded-lg border border-[#eee] bg-[#fafafa] p-3 text-center"
+                    >
                       <div className="text-xs text-[#888]">{v.label}</div>
-                      <div className="mt-1 text-lg font-bold text-[#1a1a1a]">{v.value}</div>
+                      <div className="mt-1 flex items-center justify-center gap-1">
+                        <div className="text-lg font-bold text-[#1a1a1a]">{v.value}</div>
+                        {v.ok ? (
+                          <ArrowUpRight className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+                        ) : (
+                          <ArrowDownRight className="h-4 w-4 text-red-500" aria-hidden="true" />
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -477,17 +560,70 @@ export default function PatientDetailPage() {
             ) : (
               patient.alerts.map((a) => (
                 <Card key={a.id} className={cardClass}>
-                  <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:justify-between">
-                    <div>
-                      <div className="flex flex-wrap gap-2">
-                        <SeverityBadge severity={a.severity} />
-                        <Badge variant="outline" className="border-[#ddd] bg-[#fafafa]">
-                          {a.alert_type}
-                        </Badge>
-                      </div>
-                      <p className="mt-2 text-sm text-[#333]">{a.message}</p>
-                      <p className="text-xs text-[#888]">{formatEasternDateTime(a.created_at)}</p>
-                    </div>
+                  <CardContent className="space-y-4 p-4">
+                    {(() => {
+                      const parsed = parseAlertMessage(a.message);
+                      return (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <SeverityBadge severity={a.severity} />
+                            <Badge variant="outline" className="border-[#ddd] bg-[#fafafa]">
+                              {a.alert_type}
+                            </Badge>
+                            <span className="ml-auto text-xs text-[#888]">
+                              {formatEasternDateTime(a.created_at)}
+                            </span>
+                          </div>
+
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="rounded-lg border border-[#e6edf7] bg-[#f8fbff] p-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-[#5a6b82]">
+                                Clinical Question
+                              </p>
+                              <p className="mt-1 text-sm font-medium text-[#1a1a1a]">{parsed.question}</p>
+                            </div>
+                            <div className="rounded-lg border border-[#e8f4ea] bg-[#f7fcf8] p-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-[#4f6b56]">
+                                Patient Answer
+                              </p>
+                              <p className="mt-1 text-sm text-[#1a1a1a]">{parsed.answer}</p>
+                            </div>
+                          </div>
+
+                          <div className="rounded-lg border border-[#f0e7da] bg-[#fffaf2] p-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-[#7b623e]">
+                              Assessment
+                            </p>
+                            <p className="mt-1 text-sm text-[#1a1a1a]">{parsed.assessment}</p>
+                          </div>
+
+                          <div className="rounded-lg border border-[#eee] bg-[#fafafa] p-3">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-[#777]">
+                              Flags
+                            </p>
+                            {parsed.flags.length > 0 ? (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {parsed.flags.map((flag, idx) => (
+                                  <Badge
+                                    key={`${a.id}-flag-${idx}`}
+                                    variant="outline"
+                                    className="border-[#e8c8c8] bg-[#fff5f5] text-[#a33a3a]"
+                                  >
+                                    {flag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="mt-1 text-sm text-[#666]">No specific flags extracted.</p>
+                            )}
+                          </div>
+
+                          {parsed.question === "No question captured" && (
+                            <p className="text-xs text-[#888]">Raw message: {parsed.rawSummary}</p>
+                          )}
+                        </>
+                      );
+                    })()}
                   </CardContent>
                 </Card>
               ))

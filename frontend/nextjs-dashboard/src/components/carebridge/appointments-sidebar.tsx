@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api, type AppointmentItem } from "@/lib/api";
+import { api, type AppointmentItem, type FollowupJobItem } from "@/lib/api";
 import {
   apiInstantToEasternDateKey,
   easternTodayDateKey,
@@ -28,6 +28,8 @@ const STATUS_COLOR: Record<string, string> = {
   pending_confirmation: "#a0b8a0",
   pending_manual: "#ea580c",
   cancelled: "#9ca3af",
+  in_progress: "#1d4ed8",
+  failed: "#dc2626",
 };
 
 // ---------------------------------------------------------------------------
@@ -47,6 +49,16 @@ function buildCalendarDays(year: number, month: number): (number | null)[] {
 function titleCase(str: string): string {
   return str.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+type ScheduleItem = {
+  id: string;
+  kind: "appointment" | "followup";
+  patient_name: string | null;
+  status: string;
+  scheduled_at: string | null;
+  title: string;
+  doctor_name?: string | null;
+};
 
 // ---------------------------------------------------------------------------
 // Component
@@ -73,14 +85,21 @@ export function AppointmentsSidebar() {
   }); // 0-indexed
   const [selectedDate, setSelectedDate] = useState<string>(todayKey);
   const [appointments, setAppointments] = useState<AppointmentItem[]>([]);
+  const [followupJobs, setFollowupJobs] = useState<FollowupJobItem[]>([]);
 
   // Fetch appointments, re-poll every 30 s
   useEffect(() => {
     let cancelled = false;
     const fetchData = async () => {
       try {
-        const data = await api.getAppointments(doctor?.id);
-        if (!cancelled) setAppointments(data);
+        const [apptData, followupData] = await Promise.all([
+          api.getAppointments(doctor?.id),
+          api.getFollowupJobs(),
+        ]);
+        if (!cancelled) {
+          setAppointments(apptData);
+          setFollowupJobs(followupData);
+        }
       } catch {
         // silent — sidebar is non-critical
       }
@@ -93,27 +112,55 @@ export function AppointmentsSidebar() {
     };
   }, [doctor?.id]);
 
-  // Build date → appointments map (only scheduled/confirmed/completed have a date)
-  const apptByDate = useMemo(() => {
-    const map: Record<string, AppointmentItem[]> = {};
+  const doctorPatientIds = useMemo(() => {
+    return new Set(appointments.map((a) => a.patient_id).filter(Boolean));
+  }, [appointments]);
+
+  // Build date -> merged schedule map (appointments + follow-up calls).
+  // Follow-up jobs don't store doctor_id, so we scope them to patients currently
+  // listed under this doctor's appointments.
+  const scheduleByDate = useMemo(() => {
+    const map: Record<string, ScheduleItem[]> = {};
     for (const appt of appointments) {
       const key = apiInstantToEasternDateKey(appt.scheduled_at);
       if (!key) continue;
       if (!map[key]) map[key] = [];
-      map[key].push(appt);
+      map[key].push({
+        id: appt.id,
+        kind: "appointment",
+        patient_name: appt.patient_name,
+        status: appt.status,
+        scheduled_at: appt.scheduled_at,
+        title: titleCase(appt.appointment_type),
+        doctor_name: appt.doctor_name,
+      });
+    }
+    for (const job of followupJobs) {
+      if (!doctorPatientIds.has(job.patient_id)) continue;
+      const key = apiInstantToEasternDateKey(job.scheduled_at);
+      if (!key) continue;
+      if (!map[key]) map[key] = [];
+      map[key].push({
+        id: job.id,
+        kind: "followup",
+        patient_name: job.patient_name,
+        status: job.status,
+        scheduled_at: job.scheduled_at,
+        title: "Follow-up call",
+      });
     }
     return map;
-  }, [appointments]);
+  }, [appointments, followupJobs, doctorPatientIds]);
 
   // Set of day-numbers (1-31) that have at least one appointment in the current month view
   const daysWithAppts = useMemo(() => {
     const set = new Set<number>();
-    for (const key of Object.keys(apptByDate)) {
+    for (const key of Object.keys(scheduleByDate)) {
       const [y, m, d] = key.split("-").map(Number);
       if (y === currentYear && m - 1 === currentMonth) set.add(d);
     }
     return set;
-  }, [apptByDate, currentYear, currentMonth]);
+  }, [scheduleByDate, currentYear, currentMonth]);
 
   const calendarDays = useMemo(
     () => buildCalendarDays(currentYear, currentMonth),
@@ -121,13 +168,13 @@ export function AppointmentsSidebar() {
   );
 
   // Appointments for the selected day, sorted by time
-  const selectedAppts = useMemo(() => {
-    return (apptByDate[selectedDate] ?? []).slice().sort((a, b) => {
+  const selectedItems = useMemo(() => {
+    return (scheduleByDate[selectedDate] ?? []).slice().sort((a, b) => {
       if (!a.scheduled_at) return 1;
       if (!b.scheduled_at) return -1;
       return a.scheduled_at < b.scheduled_at ? -1 : 1;
     });
-  }, [apptByDate, selectedDate]);
+  }, [scheduleByDate, selectedDate]);
 
   // ---------------------------------------------------------------------------
   // Navigation
@@ -169,7 +216,7 @@ export function AppointmentsSidebar() {
       <div className="flex flex-1 flex-col px-4 py-5 sm:px-5 md:min-h-0 md:grow md:px-[22px] md:py-6">
 
         {/* Header */}
-        <h2 className="mb-4 text-base font-bold text-[#1a1a1a]">Upcoming Appointments</h2>
+        <h2 className="mb-4 text-base font-bold text-[#1a1a1a]">Appointments & Follow-ups</h2>
 
         {/* Month + navigation */}
         <div className="mb-3 flex items-center justify-between">
@@ -251,28 +298,26 @@ export function AppointmentsSidebar() {
         {/* Schedule list */}
         <h3 className="mb-3 text-[15px] font-bold text-[#1a1a1a]">{scheduleHeading}</h3>
 
-        {selectedAppts.length === 0 ? (
-          <p className="text-[13px] text-[#aaa]">No appointments on this day.</p>
+        {selectedItems.length === 0 ? (
+          <p className="text-[13px] text-[#aaa]">No appointments or follow-up calls on this day.</p>
         ) : (
           <div className="flex flex-col gap-1 overflow-y-auto">
-            {selectedAppts.map((appt) => (
-              <div key={appt.id} className="flex gap-3 py-2">
+            {selectedItems.map((item) => (
+              <div key={`${item.kind}-${item.id}`} className="flex gap-3 py-2">
                 <div
                   className="min-h-[32px] w-[3px] shrink-0 rounded-sm"
-                  style={{ background: STATUS_COLOR[appt.status] ?? "#a0b8a0" }}
+                  style={{ background: STATUS_COLOR[item.status] ?? "#a0b8a0" }}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="text-[12px] font-medium leading-snug text-[#1a1a1a] sm:text-[13.5px]">
-                    {appt.scheduled_at ? formatEasternTimeOnly(appt.scheduled_at) : "TBD"}
+                    {item.scheduled_at ? formatEasternTimeOnly(item.scheduled_at) : "TBD"}
                     {" — "}
-                    {titleCase(appt.appointment_type)}
-                    {appt.patient_name ? `: ${appt.patient_name}` : ""}
+                    {item.title}
+                    {item.patient_name ? `: ${item.patient_name}` : ""}
                   </div>
-                  {appt.doctor_name && (
-                    <div className="mt-0.5 text-[11px] text-[#999] sm:text-[12px]">
-                      {appt.doctor_name}
-                    </div>
-                  )}
+                  <div className="mt-0.5 text-[11px] text-[#999] sm:text-[12px]">
+                    {item.kind === "followup" ? "Automated voice follow-up" : item.doctor_name}
+                  </div>
                 </div>
               </div>
             ))}
