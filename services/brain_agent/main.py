@@ -14,6 +14,7 @@ from shared.events.bus import event_bus
 from shared.events.contracts import (
     AlertEvent,
     AlertType,
+    AppointmentBookingRequest,
     DecisionType,
     JobType,
     MedicationData,
@@ -107,6 +108,19 @@ async def _publish_actions(actions: list[dict[str, Any]]) -> None:
             )
             await event_bus.publish(
                 "schedule_event", event,
+                correlation_id=cid, source_service=SERVICE_NAME,
+            )
+
+        elif action_type == "appointment_booking_request":
+            event = AppointmentBookingRequest(
+                patient_id=action["patient_id"],
+                correlation_id=cid,
+                source_service=SERVICE_NAME,
+                urgency=action.get("urgency", "medium"),
+                reason=action.get("reason", ""),
+            )
+            await event_bus.publish(
+                "appointment_booking_request", event,
                 correlation_id=cid, source_service=SERVICE_NAME,
             )
 

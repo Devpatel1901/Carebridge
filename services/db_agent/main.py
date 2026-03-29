@@ -7,10 +7,13 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pydantic import BaseModel
+
 from shared.cache import cache
 from shared.db.engine import create_all_tables, get_db, init_db
 from services.db_agent.seed_demo import seed_demo_patients_if_empty
 from shared.events.bus import event_bus
+from shared.events.contracts import AppointmentConfirmed
 from shared.logging import CorrelationIdMiddleware, get_logger, setup_logging
 
 from services.db_agent import crud
@@ -158,9 +161,116 @@ async def patient_timeline(
 
 @app.get("/appointments")
 async def list_appointments(
+    doctor_id: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    return await crud.get_appointments(session)
+    return await crud.get_appointments(session, doctor_id=doctor_id)
+
+
+class CreateAppointmentRequest(BaseModel):
+    patient_id: str
+    appointment_type: str = "followup"
+    status: str = "pending_confirmation"
+    notes: str | None = None
+    doctor_id: str | None = None
+    doctor_name: str | None = None
+
+
+@app.post("/appointments")
+async def create_appointment(
+    body: CreateAppointmentRequest,
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    appt = await crud.create_appointment(session, body.model_dump())
+    return {
+        "id": appt.id,
+        "patient_id": appt.patient_id,
+        "status": appt.status,
+        "appointment_type": appt.appointment_type,
+    }
+
+
+class ConfirmAppointmentRequest(BaseModel):
+    slot_id: str
+    appointment_id: str
+    patient_id: str
+
+
+@app.post("/appointments/confirm")
+async def confirm_appointment(
+    body: ConfirmAppointmentRequest,
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    result = await crud.confirm_appointment_slot(
+        session,
+        slot_id=body.slot_id,
+        appointment_id=body.appointment_id,
+        patient_id=body.patient_id,
+    )
+    if result is None:
+        raise HTTPException(status_code=409, detail="Slot already booked — please choose another.")
+    await event_bus.publish(
+        "appointment_confirmed",
+        AppointmentConfirmed(
+            patient_id=result["patient_id"],
+            appointment_id=result["appointment_id"],
+            scheduled_at=result["scheduled_at"],
+            doctor_name=result["doctor_name"] or "",
+            source_service=SERVICE_NAME,
+        ),
+    )
+    return result
+
+
+class UpdateAppointmentRequest(BaseModel):
+    status: str | None = None
+    notes: str | None = None
+    scheduled_at: str | None = None
+    doctor_id: str | None = None
+    doctor_name: str | None = None
+
+
+@app.patch("/appointments/{appointment_id}")
+async def update_appointment(
+    appointment_id: str,
+    body: UpdateAppointmentRequest,
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    appt = await crud.update_appointment(session, appointment_id, updates)
+    if appt is None:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    return {
+        "id": appt.id,
+        "patient_id": appt.patient_id,
+        "status": appt.status,
+        "notes": appt.notes,
+        "doctor_name": appt.doctor_name,
+        "scheduled_at": appt.scheduled_at.isoformat() if appt.scheduled_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Doctor availability
+# ---------------------------------------------------------------------------
+
+@app.get("/doctors/availability")
+async def get_doctor_availability(
+    urgency: str = Query(default="medium"),
+    limit: int = Query(default=3, ge=1, le=10),
+    doctor_id: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    return await crud.get_available_slots(session, urgency=urgency, limit=limit, doctor_id=doctor_id)
+
+
+@app.get("/doctors")
+async def list_doctors(
+    session: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    from sqlalchemy import text
+    result = await session.execute(text("SELECT id, name, specialty FROM doctors ORDER BY name"))
+    return [{"id": r[0], "name": r[1], "specialty": r[2]} for r in result]
 
 
 # ---------------------------------------------------------------------------

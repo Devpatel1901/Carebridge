@@ -5,11 +5,15 @@ import uuid
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
 from starlette.requests import Request
 from starlette.responses import Response
 from twilio.twiml.voice_response import Gather, VoiceResponse
 
-from services.communication_agent.ai_interpreter import interpret_speech_response
+from services.communication_agent.ai_interpreter import (
+    interpret_speech_response,
+    interpret_appointment_choice,
+)
 from services.communication_agent.ngrok_compat import ngrok_free_skip_warning_params
 from shared.cache import cache
 from shared.config import get_settings
@@ -522,19 +526,328 @@ async def voice_status_webhook(request: Request) -> Response:
 
         # Clean up Redis session for terminal statuses
         if call_status in ("no-answer", "busy", "failed", "canceled"):
-            keys = await cache.keys("voice_session:*")
-            for key in keys:
-                session = await cache.get_json(key)
-                if session and session.get("call_sid") == call_sid:
-                    await cache.delete(key)
-                    logger.info(
-                        "voice_session_cleaned",
-                        key=key,
-                        call_status=call_status,
-                    )
-                    break
+            for prefix in ("voice_session:", "appt_session:"):
+                keys = await cache.keys(f"{prefix}*")
+                for key in keys:
+                    session = await cache.get_json(key)
+                    if session and session.get("call_sid") == call_sid:
+                        await cache.delete(key)
+                        logger.info(
+                            "voice_session_cleaned",
+                            key=key,
+                            call_status=call_status,
+                        )
+                        break
     except Exception:
         logger.exception("voice_status_callback.error")
 
     # Twilio expects an empty 200 response for status callbacks
     return Response(content="", status_code=200)
+
+
+# ---------------------------------------------------------------------------
+# Appointment booking voice webhooks
+# ---------------------------------------------------------------------------
+
+def _appt_session_key(params: Any) -> str | None:
+    vsid = (params.get("voice_session_id") or "").strip()
+    return f"appt_session:{vsid}" if vsid else None
+
+
+def _format_slot_for_speech(slot: dict[str, Any], index: int) -> str:
+    """Convert ISO slot_start to a human-friendly spoken string."""
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(slot["slot_start"])
+        day = dt.strftime("%A, %B %-d")
+        time = dt.strftime("%-I:%M %p")
+        return f"Option {index + 1}: {day} at {time} with {slot['doctor_name']}."
+    except Exception:
+        return f"Option {index + 1}: {slot['slot_start']} with {slot['doctor_name']}."
+
+
+async def appointment_voice_start_webhook(request: Request) -> Response:
+    """Initial TwiML for the appointment booking call — reads out available slots."""
+    params = request.query_params
+    session_key = _appt_session_key(params)
+    vr = VoiceResponse()
+
+    try:
+        if not session_key:
+            vr.say("Sorry, this call link is invalid. Goodbye.", voice="Polly.Joanna")
+            vr.hangup()
+            return _twiml(vr)
+
+        session = await cache.get_json(session_key)
+        if not session:
+            vr.say("Sorry, we could not locate your appointment session. Goodbye.", voice="Polly.Joanna")
+            vr.hangup()
+            return _twiml(vr)
+
+        patient_name = session.get("patient_name", "there")
+        slots = session.get("slots", [])
+
+        if not slots:
+            vr.say(
+                f"Hello {patient_name}. Unfortunately we have no available appointment slots at this time. "
+                "Your care team will contact you to schedule. Goodbye.",
+                voice="Polly.Joanna",
+            )
+            vr.hangup()
+            return _twiml(vr)
+
+        slot_text = " ".join(_format_slot_for_speech(s, i) for i, s in enumerate(slots))
+        greeting = (
+            f"Hello {patient_name}. "
+            "This is CareBridge. Based on your recent health check-in, your care team would like to schedule a follow-up appointment. "
+            f"I have {len(slots)} available time{'s' if len(slots) != 1 else ''} for you. "
+            f"{slot_text} "
+            "Which option works best for you? You can say the option number, the day, or tell me a different preferred time."
+        )
+
+        base = get_settings().twilio_webhook_base_url.strip().rstrip("/")
+        q = {**ngrok_free_skip_warning_params(base), "voice_session_id": session["voice_session_id"]}
+        gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
+
+        gather = _build_gather(gather_url)
+        gather.say(greeting, voice="Polly.Joanna")
+        vr.append(gather)
+
+        vr.say("I didn't hear a response. Let me repeat the options.", voice="Polly.Joanna")
+        vr.redirect(
+            f"{base}/webhooks/voice/appointment/start?{urlencode(q)}",
+            method="GET",
+        )
+        return _twiml(vr)
+
+    except Exception:
+        logger.exception("appointment_voice_start.error")
+        vr = VoiceResponse()
+        vr.say("We're having a technical issue. Please try again later. Goodbye.", voice="Polly.Joanna")
+        vr.hangup()
+        return _twiml(vr)
+
+
+async def appointment_voice_gather_webhook(request: Request) -> Response:
+    """Process patient's spoken slot choice via Claude, then confirm or retry."""
+    params = request.query_params
+    session_key = _appt_session_key(params)
+    vr = VoiceResponse()
+
+    try:
+        form = await request.form()
+    except Exception:
+        logger.exception("appointment_voice_gather.form_error")
+        vr.say("We're having a technical issue. Please try again later. Goodbye.", voice="Polly.Joanna")
+        vr.hangup()
+        return _twiml(vr)
+
+    speech_result = str(form.get("SpeechResult", "")).strip()
+    call_sid = str(form.get("CallSid", ""))
+
+    try:
+        if not session_key:
+            vr.sayn("Your session has expired. Goodbye.", voice="Polly.Joanna")
+            vr.hangup()
+            return _twiml(vr)
+
+        session = await cache.get_json(session_key)
+        if not session:
+            vr.say("Your session has expired. Goodbye.", voice="Polly.Joanna")
+            vr.hangup()
+            return _twiml(vr)
+
+        slots = session.get("slots", [])
+        patient_id = session.get("patient_id", "")
+        appointment_id = session.get("appointment_id", "")
+        retry_count = session.get("retry_count", 0)
+
+        logger.info(
+            "appointment_voice_gather.received",
+            patient_id=patient_id,
+            speech=speech_result,
+            retry_count=retry_count,
+        )
+
+        choice = await interpret_appointment_choice(speech_result, slots)
+
+        # --- Patient chose a valid slot ---
+        if choice.chosen_slot_index is not None and 0 <= choice.chosen_slot_index < len(slots):
+            chosen_slot = slots[choice.chosen_slot_index]
+            settings = get_settings()
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                confirm_resp = await client.post(
+                    f"{settings.db_agent_url}/appointments/confirm",
+                    json={
+                        "slot_id": chosen_slot["id"],
+                        "appointment_id": appointment_id,
+                        "patient_id": patient_id,
+                    },
+                )
+
+            if confirm_resp.status_code == 200:
+                confirmed = confirm_resp.json()
+                from datetime import datetime
+                try:
+                    dt = datetime.fromisoformat(confirmed["scheduled_at"])
+                    spoken_time = dt.strftime("%A, %B %-d at %-I:%M %p")
+                except Exception:
+                    spoken_time = confirmed["scheduled_at"]
+                doctor = confirmed.get("doctor_name", chosen_slot["doctor_name"])
+                vr.say(
+                    f"Perfect. Your appointment has been confirmed for {spoken_time} with {doctor}. "
+                    "Your care team will send you a reminder. Take care and goodbye!",
+                    voice="Polly.Joanna",
+                )
+                vr.hangup()
+                await cache.delete(session_key)
+                logger.info(
+                    "appointment_confirmed",
+                    patient_id=patient_id,
+                    appointment_id=appointment_id,
+                    scheduled_at=confirmed["scheduled_at"],
+                )
+                return _twiml(vr)
+
+            elif confirm_resp.status_code == 409:
+                # Race condition — slot was just taken
+                logger.warning(
+                    "appointment_voice_gather.slot_taken_race",
+                    slot_id=chosen_slot["id"],
+                    patient_id=patient_id,
+                )
+                # Offer next available slot if there is one (exclude the taken slot)
+                remaining = [s for s in slots if s["id"] != chosen_slot["id"]]
+                if remaining:
+                    session["slots"] = remaining
+                    await cache.set_json(session_key, session, expire_seconds=3600)
+                    next_slot_text = " ".join(_format_slot_for_speech(s, i) for i, s in enumerate(remaining))
+                    base = get_settings().twilio_webhook_base_url.strip().rstrip("/")
+                    q = {**ngrok_free_skip_warning_params(base), "voice_session_id": session["voice_session_id"]}
+                    gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
+                    gather = _build_gather(gather_url)
+                    gather.say(
+                        f"I'm sorry, that slot was just taken. Here are the remaining options: {next_slot_text} Which works for you?",
+                        voice="Polly.Joanna",
+                    )
+                    vr.append(gather)
+                    return _twiml(vr)
+                else:
+                    settings_inner = get_settings()
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as c:
+                            await c.patch(
+                                f"{settings_inner.db_agent_url}/appointments/{appointment_id}",
+                                json={
+                                    "status": "pending_manual",
+                                    "notes": "All available slots were taken during booking. Manual scheduling required.",
+                                },
+                            )
+                    except Exception:
+                        logger.exception("appointment_voice_gather.patch_failed_race", appointment_id=appointment_id)
+                    vr.say(
+                        "I'm sorry, all available slots have just been taken. Your care team will call you to schedule. Goodbye.",
+                        voice="Polly.Joanna",
+                    )
+                    vr.hangup()
+                    await cache.delete(session_key)
+                    return _twiml(vr)
+            else:
+                logger.error("appointment_voice_gather.confirm_failed", status=confirm_resp.status_code)
+                settings_err = get_settings()
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as c:
+                        await c.patch(
+                            f"{settings_err.db_agent_url}/appointments/{appointment_id}",
+                            json={
+                                "status": "pending_manual",
+                                "notes": "Booking confirmation failed due to a system error. Manual scheduling required.",
+                            },
+                        )
+                except Exception:
+                    logger.exception("appointment_voice_gather.patch_failed_err", appointment_id=appointment_id)
+                vr.say("There was a problem confirming your appointment. Your care team will follow up. Goodbye.", voice="Polly.Joanna")
+                vr.hangup()
+                await cache.delete(session_key)
+                return _twiml(vr)
+
+        # --- Patient expressed a different preferred time ---
+        if choice.preferred_time and retry_count < 1:
+            settings = get_settings()
+            session["retry_count"] = retry_count + 1
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                slots_resp = await client.get(
+                    f"{settings.db_agent_url}/doctors/availability",
+                    params={"urgency": session.get("urgency", "medium"), "limit": 3},
+                )
+            new_slots = slots_resp.json() if slots_resp.status_code == 200 else slots
+            session["slots"] = new_slots
+            await cache.set_json(session_key, session, expire_seconds=3600)
+
+            slot_text = " ".join(_format_slot_for_speech(s, i) for i, s in enumerate(new_slots))
+            base = get_settings().twilio_webhook_base_url.strip().rstrip("/")
+            q = {**ngrok_free_skip_warning_params(base), "voice_session_id": session["voice_session_id"]}
+            gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
+            gather = _build_gather(gather_url)
+            gather.say(
+                f"I understand you'd prefer {choice.preferred_time}. "
+                f"Here are our closest available times: {slot_text} Which option works best?",
+                voice="Polly.Joanna",
+            )
+            vr.append(gather)
+            return _twiml(vr)
+
+        # --- Needs clarification ---
+        if choice.needs_clarification and retry_count < 1:
+            session["retry_count"] = retry_count + 1
+            await cache.set_json(session_key, session, expire_seconds=3600)
+            clarification = choice.clarification_question or "Could you please repeat which option you'd prefer?"
+            base = get_settings().twilio_webhook_base_url.strip().rstrip("/")
+            q = {**ngrok_free_skip_warning_params(base), "voice_session_id": session["voice_session_id"]}
+            gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
+            gather = _build_gather(gather_url)
+            gather.say(clarification, voice="Polly.Joanna")
+            vr.append(gather)
+            return _twiml(vr)
+
+        # --- Fallback: max retries reached or no slot chosen ---
+        # Persist the patient's expressed preference so nurses can act on it
+        preferred = choice.preferred_time if choice else None
+        note_parts = ["Manual scheduling required — automated booking unsuccessful."]
+        if preferred:
+            note_parts.append(f"Patient requested: {preferred}.")
+        note_parts.append("Please call patient to confirm a suitable time.")
+        fallback_note = " ".join(note_parts)
+
+        settings = get_settings()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.patch(
+                    f"{settings.db_agent_url}/appointments/{appointment_id}",
+                    json={"status": "pending_manual", "notes": fallback_note},
+                )
+        except Exception:
+            logger.exception("appointment_voice_gather.patch_failed", appointment_id=appointment_id)
+
+        vr.say(
+            "We were unable to schedule your appointment automatically. "
+            "Your care team will call you directly to find a suitable time. Goodbye.",
+            voice="Polly.Joanna",
+        )
+        vr.hangup()
+        await cache.delete(session_key)
+        logger.info(
+            "appointment_booking.pending_manual",
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            preferred_time=preferred,
+        )
+        return _twiml(vr)
+
+    except Exception:
+        logger.exception("appointment_voice_gather.error", session_key=session_key)
+        vr = VoiceResponse()
+        vr.say("We're having a technical issue. Please try again later. Goodbye.", voice="Polly.Joanna")
+        vr.hangup()
+        return _twiml(vr)

@@ -521,17 +521,15 @@ def action_generation_node(state: BrainState) -> dict[str, Any]:
             "message": alert_msg,
         })
 
-    # Appointment
+    # Appointment — emit booking request so Communication Agent can negotiate
+    # a real slot with the patient via voice call
     if decision_type == "appointment_required":
         actions.append({
-            "type": "schedule_event",
+            "type": "appointment_booking_request",
             "patient_id": patient_id,
             "correlation_id": correlation_id,
-            "job_type": JobType.APPOINTMENT.value,
-            "scheduled_at": (
-                datetime.now(timezone.utc) + timedelta(days=1)
-            ).isoformat(),
-            "metadata": {"reason": reasoning},
+            "urgency": urgency,
+            "reason": reasoning,
         })
 
     # Schedule next follow-up; tag response-chain events so demo mode uses real delay

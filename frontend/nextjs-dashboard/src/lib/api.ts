@@ -97,6 +97,7 @@ export interface AppointmentItem {
   scheduled_at: string | null;
   status: string;
   notes: string | null;
+  doctor_name: string | null;
   created_at: string | null;
 }
 
@@ -136,7 +137,10 @@ export const api = {
     fetchJson<{ id: string; acknowledged: boolean }>(`${DB_AGENT_URL}/alerts/${id}/acknowledge`, {
       method: "PATCH",
     }),
-  getAppointments: () => fetchJson<AppointmentItem[]>(`${DB_AGENT_URL}/appointments`),
+  getAppointments: (doctorId?: string) =>
+    fetchJson<AppointmentItem[]>(
+      `${DB_AGENT_URL}/appointments${doctorId ? `?doctor_id=${encodeURIComponent(doctorId)}` : ""}`
+    ),
   getTimeline: (patientId: string) =>
     fetchJson<TimelineEntry[]>(`${DB_AGENT_URL}/patients/${patientId}/timeline`),
   triggerFollowup: (patientId: string) =>
