@@ -15,6 +15,7 @@ from services.communication_agent.ai_interpreter import (
     interpret_appointment_choice,
     interpret_speech_response,
 )
+from services.communication_agent.elevenlabs_tts import tts_speak_url
 from services.communication_agent.followup_db import patch_followup_job_status
 from services.communication_agent.ngrok_compat import ngrok_free_skip_warning_params
 from shared.cache import cache
@@ -97,6 +98,15 @@ def _build_gather(action: str, vr: VoiceResponse | None = None) -> Gather:
     )
 
 
+def _speak(element: VoiceResponse | Gather, text: str) -> None:
+    """Speak text via ElevenLabs <Play> when configured, else fall back to Polly <Say>."""
+    settings = get_settings()
+    if settings.elevenlabs_api_key:
+        element.play(tts_speak_url(text))
+    else:
+        element.say(text, voice="Polly.Joanna")
+
+
 def _build_response_items(session: dict[str, Any]) -> list[ResponseItem]:
     items: list[ResponseItem] = []
     for r in session.get("responses", []):
@@ -156,21 +166,14 @@ async def voice_start_webhook(request: Request) -> Response:
 
     try:
         if not session_key:
-            vr.say(
-                "Sorry, this call link is invalid. Please contact your care team. Goodbye.",
-                voice="Polly.Joanna",
-            )
+            _speak(vr, "Sorry, this call link is invalid. Please contact your care team. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
         session = await cache.get_json(session_key)
 
         if not session or not session.get("questions"):
-            vr.say(
-                "Sorry, we could not locate your follow-up questionnaire. "
-                "Please contact your care team. Goodbye.",
-                voice="Polly.Joanna",
-            )
+            _speak(vr, "Sorry, we could not locate your follow-up questionnaire. Please contact your care team. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
@@ -194,13 +197,10 @@ async def voice_start_webhook(request: Request) -> Response:
             {"q_index": "0"},
         )
         gather = _build_gather(action_url)
-        gather.say(greeting_text, voice="Polly.Joanna")
+        _speak(gather, greeting_text)
         vr.append(gather)
 
-        vr.say(
-            "I didn't hear a response. Let me repeat the question.",
-            voice="Polly.Joanna",
-        )
+        _speak(vr, "I didn't hear a response. Let me repeat the question.")
         vr.redirect(
             _abs_voice_url("/webhooks/voice/start", session, params),
             method="GET",
@@ -210,10 +210,7 @@ async def voice_start_webhook(request: Request) -> Response:
     except Exception:
         logger.exception("voice_start.error")
         vr = VoiceResponse()
-        vr.say(
-            "We're having a technical issue. Please try again later. Goodbye.",
-            voice="Polly.Joanna",
-        )
+        _speak(vr, "We're having a technical issue. Please try again later. Goodbye.")
         vr.hangup()
         return _twiml(vr)
 
@@ -235,10 +232,7 @@ async def voice_gather_webhook(request: Request) -> Response:
     except Exception:
         logger.exception("voice_gather.form_parse_error", session_key=session_key)
         vr = VoiceResponse()
-        vr.say(
-            "We're having a technical issue. Please try again later. Goodbye.",
-            voice="Polly.Joanna",
-        )
+        _speak(vr, "We're having a technical issue. Please try again later. Goodbye.")
         vr.hangup()
         return _twiml(vr)
 
@@ -260,14 +254,14 @@ async def voice_gather_webhook(request: Request) -> Response:
 
     try:
         if not session_key:
-            vr.say("Your session has expired. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Your session has expired. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
         session = await cache.get_json(session_key)
 
         if not session:
-            vr.say("Your session has expired. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Your session has expired. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
@@ -315,13 +309,10 @@ async def voice_gather_webhook(request: Request) -> Response:
                     {"q_index": str(q_index), "is_clarification": "true"},
                 )
                 gather = _build_gather(action_url)
-                gather.say(clarification_text, voice="Polly.Joanna")
+                _speak(gather, clarification_text)
                 vr.append(gather)
 
-                vr.say(
-                    "I didn't hear a response. Moving to the next question.",
-                    voice="Polly.Joanna",
-                )
+                _speak(vr, "I didn't hear a response. Moving to the next question.")
                 next_index = q_index + 1
                 if next_index < len(questions):
                     vr.redirect(
@@ -385,10 +376,7 @@ async def voice_gather_webhook(request: Request) -> Response:
                     vr, session, session_key, params, call_sid
                 )
             else:
-                vr.say(
-                    "No problem. Your care team has been notified. Take care, goodbye!",
-                    voice="Polly.Joanna",
-                )
+                _speak(vr, "No problem. Your care team has been notified. Take care, goodbye!")
                 vr.hangup()
                 await _publish_responses(session, call_sid=call_sid)
                 await cache.delete(session_key)
@@ -416,10 +404,10 @@ async def voice_gather_webhook(request: Request) -> Response:
                 {"q_index": str(next_index)},
             )
             gather = _build_gather(action_url)
-            gather.say(next_text, voice="Polly.Joanna")
+            _speak(gather, next_text)
             vr.append(gather)
 
-            vr.say("I didn't hear a response. Let me repeat.", voice="Polly.Joanna")
+            _speak(vr, "I didn't hear a response. Let me repeat.")
             vr.redirect(
                 _abs_voice_url(
                     "/webhooks/voice/gather",
@@ -436,10 +424,7 @@ async def voice_gather_webhook(request: Request) -> Response:
     except Exception:
         logger.exception("voice_gather.error", session_key=session_key)
         vr = VoiceResponse()
-        vr.say(
-            "We're having a technical issue. Please try again later. Goodbye.",
-            voice="Polly.Joanna",
-        )
+        _speak(vr, "We're having a technical issue. Please try again later. Goodbye.")
         vr.hangup()
         return _twiml(vr)
 
@@ -470,14 +455,14 @@ async def voice_complete_webhook(request: Request) -> Response:
 
     try:
         if not session_key:
-            vr.say("Your session has ended. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Your session has ended. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
         session = await cache.get_json(session_key)
 
         if not session:
-            vr.say("Your session has ended. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Your session has ended. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
@@ -486,10 +471,7 @@ async def voice_complete_webhook(request: Request) -> Response:
     except Exception:
         logger.exception("voice_complete.error", session_key=session_key)
         vr = VoiceResponse()
-        vr.say(
-            "We're having a technical issue. Please try again later. Goodbye.",
-            voice="Polly.Joanna",
-        )
+        _speak(vr, "We're having a technical issue. Please try again later. Goodbye.")
         vr.hangup()
         return _twiml(vr)
 
@@ -585,12 +567,7 @@ async def _transition_to_inline_booking(
             slots = slots_resp.json() if slots_resp.status_code == 200 else []
 
             if not slots:
-                vr.say(
-                    "I'd like to schedule an appointment for you, but unfortunately "
-                    "there are no available slots right now. "
-                    "Your care team will call you to arrange a time. Take care, goodbye!",
-                    voice="Polly.Joanna",
-                )
+                _speak(vr, "I'd like to schedule an appointment for you, but unfortunately there are no available slots right now. Your care team will call you to arrange a time. Take care, goodbye!")
                 vr.hangup()
                 logger.warning("inline_booking.no_slots", patient_id=patient_id)
                 return
@@ -612,11 +589,7 @@ async def _transition_to_inline_booking(
             )
     except Exception:
         logger.exception("inline_booking.db_error", patient_id=patient_id)
-        vr.say(
-            "I'd like to schedule an appointment, but we're having a technical issue. "
-            "Your care team will call you to arrange a time. Goodbye!",
-            voice="Polly.Joanna",
-        )
+        _speak(vr, "I'd like to schedule an appointment, but we're having a technical issue. Your care team will call you to arrange a time. Goodbye!")
         vr.hangup()
         return
 
@@ -651,10 +624,10 @@ async def _transition_to_inline_booking(
     )
 
     gather = _build_gather(gather_url)
-    gather.say(prompt, voice="Polly.Joanna")
+    _speak(gather, prompt)
     vr.append(gather)
 
-    vr.say("I didn't hear a response. Let me repeat the options.", voice="Polly.Joanna")
+    _speak(vr, "I didn't hear a response. Let me repeat the options.")
     vr.redirect(repeat_url, method="GET")
 
     logger.info(
@@ -673,13 +646,7 @@ async def _finish_call(
     session_key: str,
 ) -> None:
     """Say goodbye, publish responses, and clean up."""
-    vr.say(
-        "Thank you for completing your follow-up check-in. "
-        "Your care team has been notified. "
-        "Please do not hesitate to call us if you have any concerns. "
-        "Take care and goodbye!",
-        voice="Polly.Joanna",
-    )
+    _speak(vr, "Thank you for completing your follow-up check-in. Your care team has been notified. Please do not hesitate to call us if you have any concerns. Take care and goodbye!")
     vr.hangup()
 
     sid = call_sid.strip() or None
@@ -801,13 +768,13 @@ async def appointment_voice_start_webhook(request: Request) -> Response:
 
     try:
         if not session_key:
-            vr.say("Sorry, this call link is invalid. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Sorry, this call link is invalid. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
         session = await cache.get_json(session_key)
         if not session:
-            vr.say("Sorry, we could not locate your appointment session. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Sorry, we could not locate your appointment session. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
@@ -815,11 +782,7 @@ async def appointment_voice_start_webhook(request: Request) -> Response:
         slots = session.get("slots", [])
 
         if not slots:
-            vr.say(
-                f"Hello {patient_name}. Unfortunately we have no available appointment slots at this time. "
-                "Your care team will contact you to schedule. Goodbye.",
-                voice="Polly.Joanna",
-            )
+            _speak(vr, f"Hello {patient_name}. Unfortunately we have no available appointment slots at this time. Your care team will contact you to schedule. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
@@ -837,10 +800,10 @@ async def appointment_voice_start_webhook(request: Request) -> Response:
         gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
 
         gather = _build_gather(gather_url)
-        gather.say(greeting, voice="Polly.Joanna")
+        _speak(gather, greeting)
         vr.append(gather)
 
-        vr.say("I didn't hear a response. Let me repeat the options.", voice="Polly.Joanna")
+        _speak(vr, "I didn't hear a response. Let me repeat the options.")
         vr.redirect(
             f"{base}/webhooks/voice/appointment/start?{urlencode(q)}",
             method="GET",
@@ -850,7 +813,7 @@ async def appointment_voice_start_webhook(request: Request) -> Response:
     except Exception:
         logger.exception("appointment_voice_start.error")
         vr = VoiceResponse()
-        vr.say("We're having a technical issue. Please try again later. Goodbye.", voice="Polly.Joanna")
+        _speak(vr, "We're having a technical issue. Please try again later. Goodbye.")
         vr.hangup()
         return _twiml(vr)
 
@@ -865,7 +828,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
         form = await request.form()
     except Exception:
         logger.exception("appointment_voice_gather.form_error")
-        vr.say("We're having a technical issue. Please try again later. Goodbye.", voice="Polly.Joanna")
+        _speak(vr, "We're having a technical issue. Please try again later. Goodbye.")
         vr.hangup()
         return _twiml(vr)
 
@@ -874,13 +837,13 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
 
     try:
         if not session_key:
-            vr.sayn("Your session has expired. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Your session has expired. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
         session = await cache.get_json(session_key)
         if not session:
-            vr.say("Your session has expired. Goodbye.", voice="Polly.Joanna")
+            _speak(vr, "Your session has expired. Goodbye.")
             vr.hangup()
             return _twiml(vr)
 
@@ -930,11 +893,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
                 except Exception:
                     spoken_time = confirmed.get("scheduled_at", "the scheduled time")
                 doctor = confirmed.get("doctor_name", chosen_slot["doctor_name"])
-                vr.say(
-                    f"Perfect. Your appointment has been confirmed for {spoken_time} with {doctor}. "
-                    "Your care team will send you a reminder. Take care and goodbye!",
-                    voice="Polly.Joanna",
-                )
+                _speak(vr, f"Perfect. Your appointment has been confirmed for {spoken_time} with {doctor}. Your care team will send you a reminder. Take care and goodbye!")
                 vr.hangup()
                 await cache.delete(session_key)
                 logger.info(
@@ -962,10 +921,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
                     q = {**ngrok_free_skip_warning_params(base), "voice_session_id": session["voice_session_id"]}
                     gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
                     gather = _build_gather(gather_url)
-                    gather.say(
-                        f"I'm sorry, that slot was just taken. Here are the remaining options: {next_slot_text} Which works for you?",
-                        voice="Polly.Joanna",
-                    )
+                    _speak(gather, f"I'm sorry, that slot was just taken. Here are the remaining options: {next_slot_text} Which works for you?")
                     vr.append(gather)
                     return _twiml(vr)
                 else:
@@ -981,10 +937,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
                             )
                     except Exception:
                         logger.exception("appointment_voice_gather.patch_failed_race", appointment_id=appointment_id)
-                    vr.say(
-                        "I'm sorry, all available slots have just been taken. Your care team will call you to schedule. Goodbye.",
-                        voice="Polly.Joanna",
-                    )
+                    _speak(vr, "I'm sorry, all available slots have just been taken. Your care team will call you to schedule. Goodbye.")
                     vr.hangup()
                     await cache.delete(session_key)
                     return _twiml(vr)
@@ -1002,7 +955,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
                         )
                 except Exception:
                     logger.exception("appointment_voice_gather.patch_failed_err", appointment_id=appointment_id)
-                vr.say("There was a problem confirming your appointment. Your care team will follow up. Goodbye.", voice="Polly.Joanna")
+                _speak(vr, "There was a problem confirming your appointment. Your care team will follow up. Goodbye.")
                 vr.hangup()
                 await cache.delete(session_key)
                 return _twiml(vr)
@@ -1025,11 +978,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
             q = {**ngrok_free_skip_warning_params(base), "voice_session_id": session["voice_session_id"]}
             gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
             gather = _build_gather(gather_url)
-            gather.say(
-                f"I understand you'd prefer {choice.preferred_time}. "
-                f"Here are our closest available times: {slot_text} Which option works best?",
-                voice="Polly.Joanna",
-            )
+            _speak(gather, f"I understand you'd prefer {choice.preferred_time}. Here are our closest available times: {slot_text} Which option works best?")
             vr.append(gather)
             return _twiml(vr)
 
@@ -1042,7 +991,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
             q = {**ngrok_free_skip_warning_params(base), "voice_session_id": session["voice_session_id"]}
             gather_url = f"{base}/webhooks/voice/appointment/gather?{urlencode(q)}"
             gather = _build_gather(gather_url)
-            gather.say(clarification, voice="Polly.Joanna")
+            _speak(gather, clarification)
             vr.append(gather)
             return _twiml(vr)
 
@@ -1065,11 +1014,7 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
         except Exception:
             logger.exception("appointment_voice_gather.patch_failed", appointment_id=appointment_id)
 
-        vr.say(
-            "We were unable to schedule your appointment automatically. "
-            "Your care team will call you directly to find a suitable time. Goodbye.",
-            voice="Polly.Joanna",
-        )
+        _speak(vr, "We were unable to schedule your appointment automatically. Your care team will call you directly to find a suitable time. Goodbye.")
         vr.hangup()
         await cache.delete(session_key)
         logger.info(
@@ -1083,6 +1028,6 @@ async def appointment_voice_gather_webhook(request: Request) -> Response:
     except Exception:
         logger.exception("appointment_voice_gather.error", session_key=session_key)
         vr = VoiceResponse()
-        vr.say("We're having a technical issue. Please try again later. Goodbye.", voice="Polly.Joanna")
+        _speak(vr, "We're having a technical issue. Please try again later. Goodbye.")
         vr.hangup()
         return _twiml(vr)

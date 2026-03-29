@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # LLM
     anthropic_api_key: str
 
+    # ElevenLabs TTS (optional — falls back to Polly if not set)
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "gJx1vCzNCD1EQHT212Ls"
+
     # Twilio
     twilio_account_sid: str
     twilio_auth_token: str
@@ -44,6 +48,8 @@ class Settings(BaseSettings):
     scheduler_url: str = "http://localhost:8004"
 
     @field_validator(
+        "elevenlabs_api_key",
+        "elevenlabs_voice_id",
         "anthropic_api_key",
         "twilio_account_sid",
         "twilio_auth_token",

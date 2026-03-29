@@ -17,6 +17,7 @@ from twilio.twiml.voice_response import VoiceResponse
 
 from services.communication_agent.appointment_handler import handle_appointment_booking_request
 from services.communication_agent.config import SERVICE_NAME, SERVICE_PORT, comm_settings
+from services.communication_agent.elevenlabs_tts import router as tts_router
 from services.communication_agent.followup_db import patch_followup_job_status
 from services.communication_agent.ngrok_compat import ngrok_free_skip_warning_params
 from services.communication_agent.twilio_client import make_voice_call
@@ -101,6 +102,7 @@ app = FastAPI(
 )
 app.add_middleware(TwilioVoiceRequestLogMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
+app.include_router(tts_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -257,11 +259,9 @@ async def twiml_smoke() -> Response:
 
       curl -sS 'BASE/webhooks/voice/twiml-smoke' | head -1
     """
+    from services.communication_agent.webhooks import _speak
     vr = VoiceResponse()
-    vr.say(
-        "CareBridge webhook smoke test. If you hear this on a trial call, your tunnel works.",
-        voice="Polly.Joanna",
-    )
+    _speak(vr, "CareBridge webhook smoke test. If you hear this on a trial call, your tunnel works.")
     vr.hangup()
     return Response(
         content=str(vr),
