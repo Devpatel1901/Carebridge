@@ -17,7 +17,14 @@ from shared.logging import CorrelationIdMiddleware, get_logger, setup_logging
 setup_logging()
 logger = get_logger(SERVICE_NAME)
 
-ap_scheduler = AsyncIOScheduler()
+# Allow follow-up jobs to run even if the event loop was busy (Docker, GC) — default grace is tiny
+# and APScheduler will skip the job entirely ("missed by …") when late by even ~30s.
+ap_scheduler = AsyncIOScheduler(
+    job_defaults={
+        "misfire_grace_time": 600,
+        "coalesce": True,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -28,32 +35,59 @@ async def handle_schedule_event(envelope: dict[str, Any]) -> None:
     payload = envelope.get("payload", {})
     event = ScheduleEvent(**payload)
     settings = scheduler_settings.settings
+    env_correlation_id = str(envelope.get("correlation_id") or "").strip()
 
     logger.info(
         "schedule_event_received",
         patient_id=event.patient_id,
         job_type=event.job_type,
         scheduled_at=str(event.scheduled_at),
+        correlation_id=env_correlation_id or None,
     )
 
     if event.job_type == JobType.FOLLOWUP:
         from_response_chain = event.metadata.get("from_response_chain", False)
         if settings.demo_mode and not from_response_chain:
-            run_date = datetime.now(timezone.utc) + timedelta(seconds=15)
-            logger.info(
-                "demo_mode_schedule",
-                patient_id=event.patient_id,
-                run_date=str(run_date),
-            )
+            # Align with Brain: DB stores Brain's scheduled_at (minute-scale in demo). The scheduler
+            # must use the same instant, not a separate DEMO_FOLLOWUP_DELAY_SECONDS, or the UI and
+            # APScheduler disagree and calls appear "missing" or early.
+            if event.scheduled_at is not None:
+                run_date = event.scheduled_at
+                if run_date.tzinfo is None:
+                    run_date = run_date.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                if run_date <= now:
+                    run_date = now + timedelta(seconds=60)
+                logger.info(
+                    "demo_mode_schedule_from_brain",
+                    patient_id=event.patient_id,
+                    run_date=str(run_date),
+                )
+            else:
+                delay_sec = max(60, int(getattr(settings, "demo_followup_delay_seconds", 240)))
+                run_date = datetime.now(timezone.utc) + timedelta(seconds=delay_sec)
+                logger.info(
+                    "demo_mode_schedule_fallback_seconds",
+                    patient_id=event.patient_id,
+                    run_date=str(run_date),
+                    delay_seconds=delay_sec,
+                )
         else:
             run_date = event.scheduled_at or (datetime.now(timezone.utc) + timedelta(hours=24))
+            if run_date.tzinfo is None:
+                run_date = run_date.replace(tzinfo=timezone.utc)
 
+        job_id_suffix = env_correlation_id or run_date.isoformat()
         ap_scheduler.add_job(
             trigger_followup,
             trigger=DateTrigger(run_date=run_date),
-            args=[event.patient_id, settings],
-            id=f"followup_{event.patient_id}_{run_date.isoformat()}",
-            replace_existing=True,
+            kwargs={
+                "patient_id": event.patient_id,
+                "settings": settings,
+                "schedule_correlation_id": env_correlation_id or None,
+            },
+            id=f"followup_{event.patient_id}_{job_id_suffix}",
+            replace_existing=False,
             name=f"Followup for {event.patient_id}",
         )
         logger.info(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -10,6 +11,7 @@ from starlette.responses import Response
 from twilio.twiml.voice_response import Gather, VoiceResponse
 
 from services.communication_agent.ai_interpreter import interpret_speech_response
+from services.communication_agent.followup_db import patch_followup_job_status
 from services.communication_agent.ngrok_compat import ngrok_free_skip_warning_params
 from shared.cache import cache
 from shared.config import get_settings
@@ -486,6 +488,8 @@ async def _finish_call(
             patient_id=session.get("patient_id"),
         )
 
+    cid = session.get("schedule_correlation_id")
+
     try:
         await cache.delete(session_key)
     except Exception:
@@ -499,6 +503,13 @@ async def _finish_call(
         patient_id=session.get("patient_id"),
         total_responses=len(session.get("responses", [])),
     )
+
+    if cid:
+        await patch_followup_job_status(
+            str(cid),
+            "completed",
+            completed_at=datetime.now(timezone.utc),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -520,12 +531,19 @@ async def voice_status_webhook(request: Request) -> Response:
             to=to,
         )
 
-        # Clean up Redis session for terminal statuses
+        # Clean up Redis session for failed/short terminal statuses (not "completed" — _finish_call owns that).
         if call_status in ("no-answer", "busy", "failed", "canceled"):
             keys = await cache.keys("voice_session:*")
             for key in keys:
                 session = await cache.get_json(key)
                 if session and session.get("call_sid") == call_sid:
+                    cid = session.get("schedule_correlation_id")
+                    if cid:
+                        await patch_followup_job_status(
+                            str(cid),
+                            "failed",
+                            completed_at=datetime.now(timezone.utc),
+                        )
                     await cache.delete(key)
                     logger.info(
                         "voice_session_cleaned",

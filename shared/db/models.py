@@ -151,6 +151,8 @@ class FollowupJob(Base):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(50), default="pending")
     executed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    correlation_id: Mapped[str | None] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     patient: Mapped[Patient] = relationship(back_populates="followup_jobs")

@@ -54,6 +54,16 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
         ? "*Patient discharged — summary on file*"
         : "*In active care — review follow-up plan*";
 
+  const statusLower = statusLabel.trim().toLowerCase();
+  const isHighRiskStage = statusLower === "high risk";
+  const isDischarged = statusLower === "discharged";
+  const dischargeBlocked = isHighRiskStage || isDischarged;
+  const dischargeDisabledTitle = isHighRiskStage
+    ? "This patient is at high risk. Discharge intake is unavailable while status is High Risk."
+    : isDischarged
+      ? "This patient is already discharged. A discharge summary is on file."
+      : "";
+
   return (
     <>
       <aside className="order-2 flex w-full shrink-0 flex-col border-t border-[#e8e8e8] bg-white md:min-h-[calc(100vh-52px)] md:w-[min(100%,360px)] md:max-w-[360px] md:border-l md:border-t-0">
@@ -110,14 +120,37 @@ export function PatientDetailRightRail({ patient, intakeBusy, onDischargeFile }:
               </span>
             </button>
 
-            <Button
-              type="button"
-              onClick={() => setModalOpen(true)}
-              disabled={intakeBusy}
-              className="mt-5 h-11 w-full rounded-lg bg-[#2d5a43] text-[15px] font-semibold text-white shadow-sm hover:bg-[#244a36] disabled:opacity-60"
-            >
-              {intakeBusy ? "Processing…" : "Discharge Patient"}
-            </Button>
+            {dischargeBlocked ? (
+              <span
+                className="mt-5 block w-full cursor-not-allowed"
+                title={dischargeDisabledTitle}
+              >
+                <Button
+                  type="button"
+                  onClick={() => setModalOpen(true)}
+                  disabled
+                  className="h-11 w-full rounded-lg bg-[#2d5a43] text-[15px] font-semibold text-white shadow-sm disabled:opacity-60 pointer-events-none"
+                >
+                  {isDischarged ? "Already discharged" : "Discharge Patient"}
+                </Button>
+              </span>
+            ) : (
+              <Button
+                type="button"
+                onClick={() => setModalOpen(true)}
+                disabled={intakeBusy}
+                className="mt-5 h-11 w-full rounded-lg bg-[#2d5a43] text-[15px] font-semibold text-white shadow-sm hover:bg-[#244a36] disabled:opacity-60"
+              >
+                {intakeBusy ? "Processing…" : "Discharge Patient"}
+              </Button>
+            )}
+            {dischargeBlocked && isHighRiskStage && (
+              <p className="mt-2 text-[12px] leading-snug text-[#888]">
+                Discharge upload is unavailable while this patient is in{" "}
+                <span className="font-medium text-[#555]">High Risk</span> status. Stabilize or update
+                status before processing discharge.
+              </p>
+            )}
           </section>
 
           <div className="h-px bg-[#eee]" />

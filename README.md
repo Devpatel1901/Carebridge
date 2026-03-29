@@ -26,8 +26,15 @@ Patient responses → Brain Agent (risk analysis) → Alerts → Dashboard
 ### Event Flow
 
 1. **Discharge Intake**: Hospital submits summary → Brain Agent processes with Claude (parse → extract → risk eval → generate questions → decide → emit events) → DB Agent persists → Scheduler queues follow-up
-2. **Follow-up Loop**: Scheduler triggers → Communication Agent sends real SMS with disease-specific questions → Patient replies → Twilio webhooks → Brain Agent analyzes responses → Alerts if risk detected
+2. **Follow-up Loop**: Scheduler triggers → Communication Agent sends real SMS/voice with disease-specific questions → Patient replies → Twilio webhooks → Brain Agent analyzes responses → may alert and schedule another outbound follow-up whenever the decision is **not** `stable` (e.g. `followup_needed`, `alert`, `escalation`, `appointment_required`). Decision **`stable`** stops chaining further voice follow-ups when the patient is doing well.
 3. **Dashboard**: All data visible in real-time via Next.js frontend polling DB Agent
+
+### Follow-up scheduling (demo vs production)
+
+- **`DEMO_MODE=true`** (default): Discharge intake always schedules the **first** outbound follow-up (Brain `scheduled_at` plus scheduler fallback). **Subsequent** voice follow-ups after a check-in are emitted when the Brain decision is **not** `stable` (symptoms often yield `alert` or `followup_needed`). Minute-scale delays (`DEMO_FOLLOWUP_MINUTES_*`) apply. If the scheduler has no `scheduled_at` on an event, it falls back to **`DEMO_FOLLOWUP_DELAY_SECONDS`** (default 240). Each job is stored in **`followup_jobs`** with **`correlation_id`**; the Communication Agent updates **status** (`pending` → `in_progress` → `completed` or `failed`) when calls start and end.
+- **`DEMO_MODE=false`**: The Scheduler uses each event’s **`scheduled_at`** (wall-clock, UTC) with APScheduler. The Brain uses day/hour-based urgency delays for follow-ups it chooses to schedule (after a patient response, any non-`stable` decision can schedule another voice follow-up).
+
+After changing the database schema, run **`uv run alembic upgrade head`** (or equivalent in Docker) so `followup_jobs` gains `correlation_id` and `completed_at`.
 
 ## Prerequisites
 
@@ -214,7 +221,7 @@ uv run python scripts/demo_flow.py
 
 ### Communication Agent (`:8002`)
 
-- `POST /initiate-call` — Start SMS/voice follow-up
+- `POST /initiate-call` — Start SMS/voice follow-up (optional body field `schedule_correlation_id` links to a `followup_jobs` row)
 - `POST /webhooks/sms` — Twilio SMS webhook
 - `POST /webhooks/voice/start` — Twilio voice start
 - `POST /webhooks/voice/gather` — Twilio voice input
@@ -225,12 +232,14 @@ uv run python scripts/demo_flow.py
 
 - `GET /patients` — List patients
 - `GET /patients/{id}` — Patient detail
+- `POST /patients/{id}/schedule-followup` — Body: `{ "eastern_date": "YYYY-MM-DD", "eastern_time": "HH:MM" }` (US Eastern); publishes `schedule_event` for the scheduler (dashboard “Schedule follow-up”)
 - `GET /alerts` — List alerts
 - `PATCH /alerts/{id}/acknowledge` — Acknowledge alert
 - `GET /appointments` — List appointments
 - `GET /patients/{id}/timeline` — Patient event timeline
 - `GET /patients/{id}/questionnaire` — Patient questionnaire
 - `GET /followup-jobs` — List scheduled jobs
+- `PATCH /followup-jobs/by-correlation/{correlation_id}` — Update job status (used by Communication Agent)
 - `GET /health`
 
 ### Scheduler (`:8004`)

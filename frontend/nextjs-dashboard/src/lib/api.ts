@@ -76,6 +76,17 @@ export interface PatientDetail {
     notes: string | null;
     created_at: string;
   }[];
+  /** Scheduled follow-up call jobs (from schedule_event pipeline). */
+  followup_jobs: {
+    id: string;
+    job_type: string;
+    scheduled_at: string | null;
+    status: string;
+    executed_at: string | null;
+    completed_at: string | null;
+    correlation_id: string | null;
+    created_at: string;
+  }[];
 }
 
 export interface AlertItem {
@@ -141,6 +152,15 @@ export const api = {
     fetchJson<TimelineEntry[]>(`${DB_AGENT_URL}/patients/${patientId}/timeline`),
   triggerFollowup: (patientId: string) =>
     fetchJson<{ status: string }>(`${SCHEDULER_URL}/trigger/${patientId}`, { method: "POST" }),
+  /** Doctor-scheduled voice follow-up; times are US Eastern, resolved server-side. */
+  scheduleDoctorFollowup: (
+    patientId: string,
+    body: { eastern_date: string; eastern_time: string },
+  ) =>
+    fetchJson<{ correlation_id: string; scheduled_at: string }>(
+      `${DB_AGENT_URL}/patients/${patientId}/schedule-followup`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   /** Brain Agent — same pipeline as scripts/demo_flow.py step 1. Returns new patient_id. */
   ingestDischarge: (body: DischargeIntakeRequest) =>
     fetchJson<DischargeIntakeResponse>(`${BRAIN_AGENT_URL}/intake`, {

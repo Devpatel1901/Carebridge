@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from starlette.responses import Response
 from twilio.twiml.voice_response import VoiceResponse
 
 from services.communication_agent.config import SERVICE_NAME, SERVICE_PORT, comm_settings
+from services.communication_agent.followup_db import patch_followup_job_status
 from services.communication_agent.ngrok_compat import ngrok_free_skip_warning_params
 from services.communication_agent.twilio_client import make_voice_call
 from services.communication_agent.webhooks import (
@@ -176,6 +178,7 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
         "patient_name": patient_name,
         "diagnosis": diagnosis,
         "questionnaire_id": questionnaire_id,
+        "schedule_correlation_id": body.schedule_correlation_id,
         "questions": [
             {
                 "id": q.get("id", str(i)),
@@ -211,6 +214,13 @@ async def initiate_call(body: InitiateCallRequest) -> dict[str, Any]:
     # Persist call_sid in session so status webhook can find and clean it up
     session["call_sid"] = call_sid
     await cache.set_json(session_key, session, expire_seconds=3600)
+
+    if body.schedule_correlation_id:
+        await patch_followup_job_status(
+            body.schedule_correlation_id,
+            "in_progress",
+            executed_at=datetime.now(timezone.utc),
+        )
 
     logger.info(
         "call_initiated",

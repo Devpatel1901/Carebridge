@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api, PatientSummary, TimelineEntry } from "@/lib/api";
+import { formatEasternDateTime } from "@/lib/datetime";
 
 const eventTypeColors: Record<string, string> = {
   interaction: "bg-blue-50 text-blue-900 border-blue-200",
@@ -87,7 +88,7 @@ export default function TimelinePage() {
                       {entry.event_type}
                     </Badge>
                     <span className="text-xs text-[#888]">
-                      {entry.created_at ? new Date(entry.created_at).toLocaleString() : ""}
+                      {entry.created_at ? formatEasternDateTime(entry.created_at) : ""}
                     </span>
                   </div>
                   <p className="text-sm text-[#333]">{entry.summary}</p>

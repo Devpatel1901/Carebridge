@@ -314,6 +314,7 @@ async def handle_schedule_event(envelope: dict[str, Any]) -> None:
                     "patient_id": payload["patient_id"],
                     "job_type": job_type,
                     "scheduled_at": payload.get("scheduled_at"),
+                    "correlation_id": correlation_id or None,
                 }
                 job = await crud.create_followup_job(session, job_data)
                 entity_type = "followup_job"

@@ -9,7 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SeverityBadge } from "@/components/severity-badge";
 import { api, PatientDetail } from "@/lib/api";
+import { formatEasternDateTime } from "@/lib/datetime";
 import { PatientDetailRightRail } from "@/components/carebridge/patient-detail-right-rail";
+import { ScheduleFollowupModal } from "@/components/carebridge/schedule-followup-modal";
 
 const tabListClass =
   "inline-flex h-auto w-full flex-wrap gap-1 rounded-lg bg-[#f0f0f0] p-1 text-[#555] sm:w-fit";
@@ -29,6 +31,7 @@ export default function PatientDetailPage() {
   const [apiPatient, setApiPatient] = useState<PatientDetail | null>(null);
   const [apiAttempted, setApiAttempted] = useState(false);
   const [intakeBusy, setIntakeBusy] = useState(false);
+  const [scheduleFollowupOpen, setScheduleFollowupOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
   const patient = apiPatient;
@@ -133,7 +136,7 @@ export default function PatientDetailPage() {
           value={activeTab}
           onValueChange={(v) => {
             setActiveTab(v);
-            if (v === "ai-calls") void fetchPatient();
+            if (v === "ai-calls" || v === "followup") void fetchPatient();
           }}
           className="space-y-5"
         >
@@ -325,7 +328,7 @@ export default function PatientDetailPage() {
                     </div>
                     <div className="text-left sm:text-right">
                       <p className="text-sm">
-                        {ap.scheduled_at ? new Date(ap.scheduled_at).toLocaleString() : "TBD"}
+                        {ap.scheduled_at ? formatEasternDateTime(ap.scheduled_at) : "TBD"}
                       </p>
                       <Badge variant="outline" className="mt-1">
                         {ap.status}
@@ -338,6 +341,67 @@ export default function PatientDetailPage() {
           </TabsContent>
 
           <TabsContent value="followup" className="space-y-4">
+            <Card className={cardClass}>
+              <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <CardTitle>Scheduled follow-ups</CardTitle>
+                  <p className="text-sm text-[#888]">
+                    Voice calls scheduled by the pipeline or by your team below. Status updates when a call starts
+                    and when it ends. All times are US Eastern (America/New_York).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setScheduleFollowupOpen(true)}
+                  className="shrink-0 rounded-lg bg-[#2d6a2e] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#245a25]"
+                >
+                  Schedule follow-up
+                </button>
+              </CardHeader>
+              <CardContent>
+                {(patient.followup_jobs ?? []).length === 0 ? (
+                  <p className="text-center text-sm text-[#888]">No follow-up jobs scheduled yet.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {(patient.followup_jobs ?? []).map((job) => (
+                      <div
+                        key={job.id}
+                        className="flex flex-col gap-2 rounded-lg border border-[#eee] bg-[#fafafa] p-4 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div>
+                          <p className="font-medium capitalize text-[#1a1a1a]">{job.job_type}</p>
+                          <p className="mt-1 text-xs text-[#888]">
+                            Created {formatEasternDateTime(job.created_at)}
+                          </p>
+                        </div>
+                        <div className="text-left sm:text-right">
+                          <p className="text-sm text-[#333]">
+                            <span className="text-[#888]">Scheduled: </span>
+                            {job.scheduled_at ? formatEasternDateTime(job.scheduled_at) : "—"}
+                          </p>
+                          {job.executed_at && (
+                            <p className="text-sm text-[#333]">
+                              <span className="text-[#888]">Call started: </span>
+                              {formatEasternDateTime(job.executed_at)}
+                            </p>
+                          )}
+                          {job.completed_at && (
+                            <p className="text-sm text-[#333]">
+                              <span className="text-[#888]">Finished: </span>
+                              {formatEasternDateTime(job.completed_at)}
+                            </p>
+                          )}
+                          <Badge variant="outline" className="mt-1 capitalize">
+                            {job.status}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {patient.questionnaire ? (
               <Card className={cardClass}>
                 <CardHeader>
@@ -380,7 +444,7 @@ export default function PatientDetailPage() {
                       <CardTitle className="text-base capitalize">
                         {inter.interaction_type} · {inter.channel}
                       </CardTitle>
-                      <span className="text-sm text-[#888]">{new Date(inter.created_at).toLocaleString()}</span>
+                      <span className="text-sm text-[#888]">{formatEasternDateTime(inter.created_at)}</span>
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -422,7 +486,7 @@ export default function PatientDetailPage() {
                         </Badge>
                       </div>
                       <p className="mt-2 text-sm text-[#333]">{a.message}</p>
-                      <p className="text-xs text-[#888]">{new Date(a.created_at).toLocaleString()}</p>
+                      <p className="text-xs text-[#888]">{formatEasternDateTime(a.created_at)}</p>
                     </div>
                   </CardContent>
                 </Card>
@@ -432,6 +496,12 @@ export default function PatientDetailPage() {
         </Tabs>
       </div>
 
+      <ScheduleFollowupModal
+        open={scheduleFollowupOpen}
+        onOpenChange={setScheduleFollowupOpen}
+        patientId={patient.id}
+        onScheduled={fetchPatient}
+      />
       <PatientDetailRightRail patient={patient} intakeBusy={intakeBusy} onDischargeFile={handleDischargeFile} />
     </div>
   );

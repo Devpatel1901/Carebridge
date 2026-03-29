@@ -29,7 +29,7 @@ DEMO_PATIENT_SEEDS: list[dict[str, Any]] = [
         "dob": "1983-06-12",
         "phone": "+19302159133",
         "email": "neelshah190@gmail.com",
-        "status": "High Risk",
+        "status": "Stable",
         "risk_level": "high",
         "discharge_summary": {
             "diagnosis": "Traumatic brain injury (concussion) with brief LOC — monitoring in ICU",

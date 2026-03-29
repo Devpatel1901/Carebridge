@@ -1,0 +1,1 @@
+after the discharge summary is uploaded, the status gets changed to the discharged status, but the discharge button is still active. Instead of the discharge button being active, it should be renamed as "Upload another discharge summary" or something like that. Basically, I don't want to say that it is going to discharge the patient, as it is already discharged the patient.

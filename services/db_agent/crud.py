@@ -69,6 +69,16 @@ def _id() -> str:
 # Patient
 # ---------------------------------------------------------------------------
 
+def _has_discharge_payload(discharge_data: Any) -> bool:
+    """True when intake includes discharge summary content (ward → discharged on file)."""
+    if not discharge_data or not isinstance(discharge_data, dict):
+        return False
+    return bool(
+        (str(discharge_data.get("raw_text") or "").strip())
+        or (str(discharge_data.get("diagnosis") or "").strip())
+    )
+
+
 async def upsert_patient(
     session: AsyncSession,
     patient_data: dict[str, Any],
@@ -80,6 +90,11 @@ async def upsert_patient(
     patient = result.scalar_one_or_none()
 
     demographics = patient_data.get("demographics", {})
+    discharge_data = patient_data.get("discharge_data")
+    status_from_discharge = (
+        "Discharged" if _has_discharge_payload(discharge_data) else None
+    )
+
     if patient is None:
         patient = Patient(
             id=patient_id,
@@ -87,7 +102,7 @@ async def upsert_patient(
             phone=demographics.get("phone", ""),
             dob=demographics.get("dob"),
             email=demographics.get("email"),
-            status="active",
+            status=status_from_discharge or "active",
             risk_level=patient_data.get("risk_level", "low"),
         )
         session.add(patient)
@@ -103,6 +118,8 @@ async def upsert_patient(
             patient.email = demographics["email"]
         if patient_data.get("risk_level"):
             patient.risk_level = patient_data["risk_level"]
+        if status_from_discharge:
+            patient.status = "Discharged"
         patient.updated_at = _now()
         logger.info("patient_updated", patient_id=patient_id)
 
@@ -274,10 +291,50 @@ async def create_followup_job(
         job_type=data.get("job_type", "followup"),
         scheduled_at=scheduled_at,
         status=data.get("status", "pending"),
+        correlation_id=data.get("correlation_id"),
+        completed_at=data.get("completed_at"),
     )
     session.add(job)
     await session.flush()
     logger.info("followup_job_created", job_id=job.id, patient_id=job.patient_id)
+    return job
+
+
+async def update_followup_job_by_correlation(
+    session: AsyncSession,
+    correlation_id: str,
+    *,
+    status: str | None = None,
+    executed_at: datetime | None = None,
+    completed_at: datetime | None = None,
+) -> FollowupJob | None:
+    """Update a follow-up job matched by schedule event correlation_id."""
+    if not correlation_id.strip():
+        return None
+    result = await session.execute(
+        select(FollowupJob).where(FollowupJob.correlation_id == correlation_id.strip())
+    )
+    job = result.scalar_one_or_none()
+    if job is None:
+        return None
+    if status is not None:
+        job.status = status
+    now = _now()
+    if executed_at is not None:
+        job.executed_at = executed_at
+    elif status == "in_progress" and job.executed_at is None:
+        job.executed_at = now
+    if completed_at is not None:
+        job.completed_at = completed_at
+    elif status in ("completed", "failed") and job.completed_at is None:
+        job.completed_at = now
+    await session.flush()
+    logger.info(
+        "followup_job_updated",
+        job_id=job.id,
+        correlation_id=correlation_id,
+        status=job.status,
+    )
     return job
 
 
@@ -397,11 +454,21 @@ async def get_patient_detail(
             selectinload(Patient.interactions),
             selectinload(Patient.alerts),
             selectinload(Patient.appointments),
+            selectinload(Patient.followup_jobs),
         )
     )
     patient = result.scalar_one_or_none()
     if patient is None:
         return None
+
+    followup_jobs_sorted = sorted(
+        patient.followup_jobs,
+        key=lambda j: (
+            j.scheduled_at or datetime.min.replace(tzinfo=timezone.utc),
+            j.created_at,
+        ),
+        reverse=True,
+    )
 
     latest_ds = (
         max(patient.discharge_summaries, key=lambda d: d.created_at)
@@ -495,6 +562,19 @@ async def get_patient_detail(
             for ap in sorted(
                 patient.appointments, key=lambda x: x.created_at, reverse=True
             )
+        ],
+        "followup_jobs": [
+            {
+                "id": j.id,
+                "job_type": j.job_type,
+                "scheduled_at": j.scheduled_at,
+                "status": j.status,
+                "executed_at": j.executed_at,
+                "completed_at": j.completed_at,
+                "correlation_id": j.correlation_id,
+                "created_at": j.created_at,
+            }
+            for j in followup_jobs_sorted
         ],
     }
 
@@ -687,6 +767,8 @@ async def get_followup_jobs(
             "scheduled_at": j.scheduled_at,
             "status": j.status,
             "executed_at": j.executed_at,
+            "completed_at": j.completed_at,
+            "correlation_id": j.correlation_id,
             "created_at": j.created_at,
         }
         for j in jobs

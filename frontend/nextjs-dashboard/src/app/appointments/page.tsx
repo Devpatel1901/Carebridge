@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api, AppointmentItem } from "@/lib/api";
+import { formatEasternDateTime } from "@/lib/datetime";
 
 const statusColors: Record<string, string> = {
   scheduled: "bg-blue-50 text-blue-900 border-blue-200",
@@ -68,7 +69,7 @@ export default function AppointmentsPage() {
                 </div>
                 <div className="space-y-1 text-left sm:text-right">
                   <p className="text-sm text-[#333]">
-                    {ap.scheduled_at ? new Date(ap.scheduled_at).toLocaleString() : "TBD"}
+                    {ap.scheduled_at ? formatEasternDateTime(ap.scheduled_at) : "TBD"}
                   </p>
                   <Badge
                     variant="outline"

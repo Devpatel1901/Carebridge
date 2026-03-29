@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,10 +14,16 @@ from shared.cache import cache
 from shared.db.engine import create_all_tables, get_db, init_db
 from services.db_agent.seed_demo import seed_demo_patients_if_empty
 from shared.events.bus import event_bus
+from shared.events.contracts import JobType, ScheduleEvent
 from shared.logging import CorrelationIdMiddleware, get_logger, setup_logging
 
 from services.db_agent import crud
 from services.db_agent.config import SERVICE_NAME, get_db_agent_settings
+from shared.schemas.models import (
+    DoctorScheduleFollowupRequest,
+    DoctorScheduleFollowupResponse,
+    FollowupJobStatusPatch,
+)
 from services.db_agent.handlers import (
     handle_alert_event,
     handle_patient_response_event,
@@ -112,6 +121,67 @@ async def get_patient(
     return detail
 
 
+_EASTERN = ZoneInfo("America/New_York")
+
+
+@app.post(
+    "/patients/{patient_id}/schedule-followup",
+    response_model=DoctorScheduleFollowupResponse,
+)
+async def schedule_doctor_followup(
+    patient_id: str,
+    body: DoctorScheduleFollowupRequest,
+    session: AsyncSession = Depends(get_db),
+) -> DoctorScheduleFollowupResponse:
+    """Publish schedule_event (same pipeline as Brain) so followup_jobs + scheduler run."""
+    detail = await crud.get_patient_detail(session, patient_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    try:
+        local_naive = datetime.strptime(
+            f"{body.eastern_date.strip()} {body.eastern_time.strip()}",
+            "%Y-%m-%d %H:%M",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid eastern_date (YYYY-MM-DD) or eastern_time (HH:MM).",
+        ) from exc
+
+    at_local = local_naive.replace(tzinfo=_EASTERN)
+    at = at_local.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if at < now - timedelta(minutes=5):
+        raise HTTPException(
+            status_code=400,
+            detail="Scheduled time cannot be more than 5 minutes in the past.",
+        )
+
+    cid = str(uuid.uuid4())
+    event = ScheduleEvent(
+        patient_id=patient_id,
+        correlation_id=cid,
+        source_service=SERVICE_NAME,
+        job_type=JobType.FOLLOWUP,
+        scheduled_at=at,
+        metadata={"source": "doctor_ui", "from_response_chain": False},
+    )
+    await event_bus.publish(
+        "schedule_event",
+        event,
+        correlation_id=cid,
+        source_service=SERVICE_NAME,
+    )
+    logger.info(
+        "doctor_schedule_followup_published",
+        patient_id=patient_id,
+        correlation_id=cid,
+        scheduled_at_utc=str(at),
+    )
+    return DoctorScheduleFollowupResponse(correlation_id=cid, scheduled_at=at)
+
+
 # ---------------------------------------------------------------------------
 # Alerts
 # ---------------------------------------------------------------------------
@@ -188,6 +258,30 @@ async def list_followup_jobs(
     session: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await crud.get_followup_jobs(session, status=status)
+
+
+@app.patch("/followup-jobs/by-correlation/{correlation_id}")
+async def patch_followup_job_by_correlation(
+    correlation_id: str,
+    body: FollowupJobStatusPatch,
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    job = await crud.update_followup_job_by_correlation(
+        session,
+        correlation_id,
+        status=body.status,
+        executed_at=body.executed_at,
+        completed_at=body.completed_at,
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Follow-up job not found")
+    return {
+        "id": job.id,
+        "patient_id": job.patient_id,
+        "status": job.status,
+        "executed_at": job.executed_at,
+        "completed_at": job.completed_at,
+    }
 
 
 # ---------------------------------------------------------------------------

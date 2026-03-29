@@ -29,6 +29,13 @@ class Settings(BaseSettings):
 
     # App
     demo_mode: bool = True
+    # When demo_mode: first scheduled follow-up runs after this many seconds (default ~4 min).
+    demo_followup_delay_seconds: int = 240
+    # Chained follow-up spacing (minutes) when demo_mode — Brain schedule_event scheduled_at.
+    demo_followup_minutes_low: int = 1
+    demo_followup_minutes_medium: int = 2
+    demo_followup_minutes_high: int = 3
+    demo_followup_minutes_critical: int = 4
 
     # Service URLs (for inter-service HTTP calls)
     brain_agent_url: str = "http://localhost:8001"
