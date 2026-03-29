@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -14,6 +14,7 @@ import {
 import { RiskBadge } from "@/components/risk-badge";
 import { Badge } from "@/components/ui/badge";
 import { api, PatientSummary } from "@/lib/api";
+import { PatientManagementHeader, PatientStatCards } from "@/components/carebridge/patient-management-static";
 
 export default function PatientsPage() {
   const [patients, setPatients] = useState<PatientSummary[]>([]);
@@ -37,51 +38,54 @@ export default function PatientsPage() {
   }, []);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Patients</h1>
-        <Badge variant="outline" className="text-zinc-400">
-          {patients.length} total
-        </Badge>
-      </div>
+    <div className="space-y-6 px-4 py-5 sm:px-6 sm:py-6 lg:px-7">
+      <PatientManagementHeader />
+      <PatientStatCards />
 
-      <Card className="bg-zinc-900 border-zinc-800">
+      <div className="overflow-hidden rounded-[14px] border border-[#e8e8e8] bg-white shadow-sm">
         <CardContent className="p-0">
           {loading ? (
-            <div className="p-8 text-center text-zinc-500">Loading...</div>
+            <div className="p-8 text-center text-[#888]">Loading...</div>
           ) : patients.length === 0 ? (
-            <div className="p-8 text-center text-zinc-500">
-              No patients yet. Run <code className="text-zinc-300">python scripts/seed_data.py</code> to add one.
+            <div className="p-8 text-center text-[#888]">
+              No patients yet. Run <code className="rounded bg-[#f5f5f5] px-1.5 py-0.5 text-[#333]">python scripts/seed_data.py</code>{" "}
+              to add one.
             </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="border-zinc-800 hover:bg-transparent">
-                  <TableHead className="text-zinc-400">Name</TableHead>
-                  <TableHead className="text-zinc-400">Phone</TableHead>
-                  <TableHead className="text-zinc-400">Status</TableHead>
-                  <TableHead className="text-zinc-400">Risk Level</TableHead>
-                  <TableHead className="text-zinc-400">Created</TableHead>
+                <TableRow className="border-[#eee] hover:bg-transparent">
+                  <TableHead className="text-[12.5px] font-semibold text-[#888]">Name</TableHead>
+                  <TableHead className="text-[12.5px] font-semibold text-[#888]">Phone</TableHead>
+                  <TableHead className="text-[12.5px] font-semibold text-[#888]">Status</TableHead>
+                  <TableHead className="text-[12.5px] font-semibold text-[#888]">Risk Level</TableHead>
+                  <TableHead className="text-[12.5px] font-semibold text-[#888]">Created</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {patients.map((p) => (
-                  <TableRow key={p.id} className="border-zinc-800 hover:bg-zinc-800/50">
+                  <TableRow
+                    key={p.id}
+                    className="border-[#f0f0f0] transition-colors duration-150 hover:bg-[#fafafa]"
+                  >
                     <TableCell>
-                      <Link href={`/patients/${p.id}`} className="text-blue-400 hover:underline font-medium">
+                      <Link
+                        href={`/patients/${p.id}`}
+                        className="font-semibold text-[#2563eb] hover:underline"
+                      >
                         {p.name}
                       </Link>
                     </TableCell>
-                    <TableCell className="text-zinc-400">{p.phone}</TableCell>
+                    <TableCell className="text-[13.5px] text-[#555]">{p.phone}</TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="bg-zinc-800 text-zinc-300 border-zinc-600">
+                      <Badge variant="outline" className="border-[#ddd] bg-[#fafafa] text-[#333]">
                         {p.status}
                       </Badge>
                     </TableCell>
                     <TableCell>
                       <RiskBadge level={p.risk_level} />
                     </TableCell>
-                    <TableCell className="text-zinc-500 text-sm">
+                    <TableCell className="text-sm text-[#888]">
                       {p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"}
                     </TableCell>
                   </TableRow>
@@ -90,7 +94,7 @@ export default function PatientsPage() {
             </Table>
           )}
         </CardContent>
-      </Card>
+      </div>
     </div>
   );
 }
