@@ -289,3 +289,14 @@ Override bases if needed: `BRAIN_AGENT_URL`, `COMM_AGENT_URL`, `DB_AGENT_URL`, `
 - **SQLite** implies a **single** DB Agent instance with the data volume; for horizontal scale or HA, migrate to **PostgreSQL** (or similar) and update `DATABASE_URL`.
 - Lock down **Twilio** webhook URLs, **rotate** keys, and enforce **HTTPS** only.
 - Add **authn/z** on public APIs and the dashboard before exposing beyond demos.
+
+## 4. Collaborators
+
+Add your team here:
+
+| Name | Email |
+|------|-------|
+| Dev Patel | entrepreneurdev1901@gmail.com |
+| Ananya Vashist | ananya.vashist21@gmail.com |
+| Abhishek Sutaria | abhishek.sutaria@gmail.com |
+| Neel Shah | shahneelsachin@gmail.com |
